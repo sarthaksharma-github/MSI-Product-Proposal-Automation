@@ -250,6 +250,13 @@ def run_automation(excel_bytes, pptx_bytes, from_row, to_row):
             "[BEN_1]":      safe_text(row.get('Associated Customer Benefit #1', '')),
             "[BEN_2]":      safe_text(row.get('Associated Customer Benefit #2', '')),
             "[BEN_3]":      safe_text(row.get('Associated Customer Benefit #3', '')),
+            # --- New Mappings ---
+            "[CATEGORY]": safe_text(row.get('Category', '')),
+            "[DES]": safe_text(row.get('Description', '')),
+            "[MAT]": safe_text(row.get('Material', '')),
+            "[DIM]": safe_text(row.get('Dimensions', '')), 
+            "[COLOR]": safe_text(row.get('Color', '')),
+            "[COUNTRY]": safe_text(row.get('Country', '')),
         }
 
         for shape in slide.shapes:
