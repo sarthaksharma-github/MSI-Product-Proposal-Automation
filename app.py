@@ -1,6 +1,6 @@
 # ============================================================
-#  MSI SERVICES — SLIDE AUTOMATION TOOL v3.0
-#  Streamlit App
+#  MSI SERVICES — SLIDE AUTOMATION TOOL v3.1
+#  Streamlit App — Dynamic Column Mapping Edition
 # ============================================================
 
 import streamlit as st
@@ -112,7 +112,7 @@ st.markdown("""
 <div class="msi-header">
   <div class="msi-logo">MSI</div>
   <div>
-    <p class="msi-header-title">Slide Automation Tool <span style="font-size:11px;opacity:0.7;font-weight:400;">v3.0</span></p>
+    <p class="msi-header-title">Slide Automation Tool <span style="font-size:11px;opacity:0.7;font-weight:400;">v3.1</span></p>
     <p class="msi-header-sub">Sales Support Operations &nbsp;·&nbsp; Making Dream Surfaces Attainable</p>
   </div>
 </div>
@@ -121,7 +121,7 @@ st.markdown("""
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════
-#  CORE ENGINE  (unchanged from v2.0)
+#  CORE ENGINE
 # ══════════════════════════════════════════════════════════════
 
 def clone_slide(prs, source_slide):
@@ -133,6 +133,7 @@ def clone_slide(prs, source_slide):
     for el in list(source_sp_tree)[2:]:
         sp_tree.append(copy.deepcopy(el))
     return new_slide
+
 
 def get_excel_images(excel_bytes):
     wb = openpyxl.load_workbook(io.BytesIO(excel_bytes))
@@ -146,6 +147,7 @@ def get_excel_images(excel_bytes):
             pass
     return image_map
 
+
 def process_text_frame(tf, placeholders):
     for para in tf.paragraphs:
         for key, val in placeholders.items():
@@ -156,6 +158,7 @@ def process_text_frame(tf, placeholders):
                     for i in range(1, len(para.runs)):
                         para.runs[i].text = ""
 
+
 def replace_text_in_shape(shape, placeholders):
     if shape.has_text_frame:
         process_text_frame(shape.text_frame, placeholders)
@@ -163,6 +166,7 @@ def replace_text_in_shape(shape, placeholders):
         for row in shape.table.rows:
             for cell in row.cells:
                 process_text_frame(cell.text_frame, placeholders)
+
 
 def find_image_placeholder(slide):
     for shape in slide.shapes:
@@ -172,8 +176,12 @@ def find_image_placeholder(slide):
                 return shape
     return None
 
+
 def insert_image_into_placeholder(slide, img_bytes, placeholder):
-    left, top, width, height = placeholder.left, placeholder.top, placeholder.width, placeholder.height
+    left, top, width, height = (
+        placeholder.left, placeholder.top,
+        placeholder.width, placeholder.height
+    )
     placeholder.fill.background()
     for para in placeholder.text_frame.paragraphs:
         for run in para.runs:
@@ -181,7 +189,8 @@ def insert_image_into_placeholder(slide, img_bytes, placeholder):
 
     img = PILImage.open(io.BytesIO(img_bytes)).convert('RGB')
     img_w, img_h = img.size
-    target_ratio, img_ratio = width / height, img_w / img_h
+    target_ratio = width / height
+    img_ratio = img_w / img_h
 
     if img_ratio > target_ratio:
         new_h = int(img_w / target_ratio)
@@ -197,34 +206,105 @@ def insert_image_into_placeholder(slide, img_bytes, placeholder):
     output.seek(0)
     slide.shapes.add_picture(output, left, top, width, height)
 
-def safe_format(val, is_currency=False, is_percent=False):
-    try:
-        cleaned = str(val).replace('$', '').replace(',', '').replace('%', '').strip()
-        num = 0.0 if (not cleaned or cleaned.lower() == 'nan') else float(cleaned)
-        if is_currency:
-            return f"${num:,.2f}" if num % 1 != 0 else f"${num:,.0f}"
-        if is_percent:
-            return f"{num:.0%}"
-        return f"{num:,.0f}"
-    except:
-        return str(val)
 
-def safe_text(val):
+# ══════════════════════════════════════════════════════════════
+#  SMART FORMAT  ← NEW in v3.1
+#
+#  Replaces safe_format() + safe_text() with a single unified
+#  function. Rules (evaluated in order):
+#
+#  1. Empty / NaN                 → ""
+#  2. Already has a % symbol      → treat as percent string
+#  3. Numeric AND 0 < value < 1   → percentage  (e.g. 0.45 → "45%")
+#  4. Numeric AND has decimals    → currency    (e.g. 12.99 → "$12.99")
+#  5. Numeric AND whole number    → comma int   (e.g. 1500 → "1,500")
+#  6. Everything else             → plain text
+# ══════════════════════════════════════════════════════════════
+
+def smart_format(val):
     v = str(val).strip()
-    return "" if v.lower() == 'nan' else v
+
+    # Rule 1 — empty or NaN
+    if not v or v.lower() == 'nan':
+        return ""
+
+    # Rule 2 — already marked as percent by the source data
+    if '%' in v:
+        try:
+            num = float(v.replace('%', '').replace(',', '').strip())
+            # Source stores as "45%" → we want "45%", not "4500%"
+            # So divide by 100 only if num > 1 (it's already a whole-percent)
+            ratio = num / 100 if num > 1 else num
+            return f"{ratio:.0%}"
+        except ValueError:
+            return v
+
+    # Strip currency symbols to attempt numeric parse
+    cleaned = v.replace('$', '').replace(',', '').strip()
+
+    try:
+        num = float(cleaned)
+
+        # Rule 3 — fraction between 0 and 1 → percentage
+        if 0 < num < 1:
+            return f"{num:.0%}"
+
+        # Rule 4 — has a non-zero decimal component → currency
+        if num % 1 != 0:
+            return f"${num:,.2f}"
+
+        # Rule 5 — whole number → plain formatted integer
+        return f"{num:,.0f}"
+
+    except ValueError:
+        # Rule 6 — non-numeric text → return as-is
+        return v
+
+
+# ══════════════════════════════════════════════════════════════
+#  DYNAMIC REPLACEMENTS BUILDER  ← NEW in v3.1
+#
+#  Reads every column from the DataFrame row and constructs
+#  the replacements dict automatically.
+#
+#  Convention: Excel column "Unit Retail"  →  PPT tag [Unit Retail]
+#
+#  The PPT template is now the source of truth for tag names.
+#  Whatever placeholder text exists in the template (e.g. [Name],
+#  [Unit Cost]) must exactly match the corresponding Excel header,
+#  wrapped in square brackets.
+# ══════════════════════════════════════════════════════════════
+
+def build_replacements(row):
+    """
+    Given a pandas Series (one Excel row), returns a dict of
+    { "[Column Name]": formatted_value } for every column.
+    """
+    replacements = {}
+    for col_name, val in row.items():
+        tag = f"[{col_name}]"
+        replacements[tag] = smart_format(val)
+    return replacements
+
+
+# ══════════════════════════════════════════════════════════════
+#  MAIN AUTOMATION RUNNER
+# ══════════════════════════════════════════════════════════════
 
 def run_automation(excel_bytes, pptx_bytes, from_row, to_row):
     df = pd.read_excel(io.BytesIO(excel_bytes))
 
+    # from_row / to_row are Excel row numbers (header = row 1, data starts row 2)
     start_idx = max(0, from_row - 2)
-    end_idx = min(to_row - 1, len(df))
+    end_idx   = min(to_row - 1, len(df))
     df_subset = df.iloc[start_idx:end_idx].copy()
 
     if df_subset.empty:
         raise ValueError("Selected row range contains no data.")
 
-    image_map = get_excel_images(excel_bytes)
-    prs = Presentation(io.BytesIO(pptx_bytes))
+    image_map  = get_excel_images(excel_bytes)
+    prs        = Presentation(io.BytesIO(pptx_bytes))
+
     if len(prs.slides) != 1:
         raise ValueError("Template must have exactly 1 slide.")
 
@@ -233,41 +313,25 @@ def run_automation(excel_bytes, pptx_bytes, from_row, to_row):
         clone_slide(prs, source_slide)
 
     for i, (original_idx, row) in enumerate(df_subset.iterrows()):
-        slide = prs.slides[i]
-        excel_row_num = original_idx + 2
+        slide         = prs.slides[i]
+        excel_row_num = original_idx + 2   # offset: header=1, first data row=2
 
-        replacements = {
-            "[ITEM_NUM]": safe_text(row.get('Item #', '')),
-            "[ITEM_NAME]": safe_text(row.get('Name', '')),
-            "[RETAIL]": safe_format(row.get('Retail', row.get('Unit Retail', 0)), is_currency=True),
-            "[COST]": safe_format(row.get('Unit Cost', 0), is_currency=True),
-            "[IMU]": safe_format(row.get('IMU%', 0), is_percent=True),
-            "[PROJ_UNITS]": safe_format(row.get('Projected Sales Units', 0)),
-            "[PROJ_RTL]": safe_format(row.get('Projected Sales Rtl', 0), is_currency=True),
-            "[FEAT_1]": safe_text(row.get('Key Product Feature #1', '')),
-            "[FEAT_2]": safe_text(row.get('Key Product Feature #2', '')),
-            "[FEAT_3]": safe_text(row.get('Key Product Feature #3', '')),
-            "[BEN_1]": safe_text(row.get('Associated Customer Benefit #1', '')),
-            "[BEN_2]": safe_text(row.get('Associated Customer Benefit #2', '')),
-            "[BEN_3]": safe_text(row.get('Associated Customer Benefit #3', '')),
-            
-            # --- New Mappings ---
-            "[CATEGORY]": safe_text(row.get('Category', '')),
-            "[DES]": safe_text(row.get('Description', '')),
-            "[MAT]": safe_text(row.get('Material', '')),
-            "[DIM]": safe_text(row.get('Dimensions', '')), 
-            "[COLOR]": safe_text(row.get('Color', '')),
-            "[COUNTRY]": safe_text(row.get('Country', '')),
-        }
+        # ── Dynamic replacements (no hardcoding) ──────────────
+        replacements = build_replacements(row)
 
         for shape in slide.shapes:
             replace_text_in_shape(shape, replacements)
 
+        # ── Image insertion ───────────────────────────────────
         placeholder = find_image_placeholder(slide)
+
         if excel_row_num in image_map:
             if placeholder:
-                insert_image_into_placeholder(slide, image_map[excel_row_num], placeholder)
+                insert_image_into_placeholder(
+                    slide, image_map[excel_row_num], placeholder
+                )
         else:
+            # No image for this row — silently clear the placeholder
             if placeholder:
                 for para in placeholder.text_frame.paragraphs:
                     for run in para.runs:
@@ -286,13 +350,11 @@ def run_automation(excel_bytes, pptx_bytes, from_row, to_row):
 TEMPLATES_DIR = "templates"
 
 def get_available_templates():
-    """Returns list of .pptx filenames found in the templates/ folder."""
     if not os.path.exists(TEMPLATES_DIR):
         return []
     return [f for f in os.listdir(TEMPLATES_DIR) if f.endswith('.pptx')]
 
 def load_template(filename):
-    """Reads and returns bytes of a template from the templates/ folder."""
     path = os.path.join(TEMPLATES_DIR, filename)
     with open(path, 'rb') as f:
         return f.read()
@@ -331,6 +393,20 @@ excel_file = st.file_uploader(
     type=["xlsx"],
     help="Product data with embedded images. Filename does not matter."
 )
+
+# ── Column preview (shown once Excel is uploaded) ────────────
+if excel_file is not None:
+    try:
+        preview_df = pd.read_excel(excel_file, nrows=0)   # headers only
+        excel_file.seek(0)                                  # reset for later read
+        tags = [f"[{col}]" for col in preview_df.columns]
+        st.info(
+            f"**{len(tags)} columns detected.** "
+            f"Your template placeholders should match these tags exactly:  \n"
+            + "  `" + "`   `".join(tags) + "`"
+        )
+    except Exception:
+        pass   # non-critical — don't block the user
 
 st.divider()
 
@@ -381,7 +457,7 @@ if st.button("🚀  Generate Slides"):
         with st.spinner("Building your slides... please wait."):
             try:
                 excel_bytes = excel_file.read()
-                pptx_bytes = load_template(selected_template)
+                pptx_bytes  = load_template(selected_template)
 
                 result_bytes, count = run_automation(
                     excel_bytes, pptx_bytes,
@@ -401,7 +477,11 @@ if st.button("🚀  Generate Slides"):
             except ValueError as e:
                 st.error(f"⚠️ {str(e)}")
             except Exception as e:
-                st.error(f"Something went wrong: `{str(e)}`\n\nCheck your file formats and column names, then try again.")
+                st.error(
+                    f"Something went wrong: `{str(e)}`\n\n"
+                    f"Check your file formats and that your template placeholders "
+                    f"match the column names shown above."
+                )
 
 # ══════════════════════════════════════════════════════════════
 #  FOOTER
