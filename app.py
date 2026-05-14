@@ -80,7 +80,7 @@ st.markdown("""
     font-weight: 500;
     margin-left: 6px;
   }
-  .stButton > button {
+  .stButton > button, .stDownloadButton > button {
     background-color: #8B6F4E !important;
     color: white !important;
     font-weight: 600 !important;
@@ -90,7 +90,7 @@ st.markdown("""
     font-size: 14px !important;
     width: 100%;
   }
-  .stButton > button:hover {
+  .stButton > button:hover, .stDownloadButton > button:hover {
     background-color: #6E5840 !important;
   }
   div[data-testid="stSelectbox"] label,
@@ -284,6 +284,7 @@ def run_automation(excel_bytes, pptx_bytes, from_row, to_row):
 # ══════════════════════════════════════════════════════════════
 
 TEMPLATES_DIR = "templates"
+EXCEL_TEMPLATES_DIR = "excel_templates"
 
 def get_available_templates():
     """Returns list of .pptx filenames found in the templates/ folder."""
@@ -294,6 +295,18 @@ def get_available_templates():
 def load_template(filename):
     """Reads and returns bytes of a template from the templates/ folder."""
     path = os.path.join(TEMPLATES_DIR, filename)
+    with open(path, 'rb') as f:
+        return f.read()
+
+def get_available_excel_templates():
+    """Returns list of .xlsx filenames found in the excel_templates/ folder."""
+    if not os.path.exists(EXCEL_TEMPLATES_DIR):
+        return []
+    return [f for f in os.listdir(EXCEL_TEMPLATES_DIR) if f.endswith('.xlsx')]
+
+def load_excel_template(filename):
+    """Reads and returns bytes of an excel template from the excel_templates/ folder."""
+    path = os.path.join(EXCEL_TEMPLATES_DIR, filename)
     with open(path, 'rb') as f:
         return f.read()
 
@@ -325,6 +338,21 @@ st.divider()
 
 st.markdown("#### Step 2 — Upload Product Data")
 st.caption("Upload your Excel file. Any filename is accepted.")
+
+excel_templates = get_available_excel_templates()
+if excel_templates:
+    st.markdown("<p style='font-size: 13px; font-weight: 600; color: #2C1F14; margin-bottom: 5px;'>Need a template? Download one here:</p>", unsafe_allow_html=True)
+    cols = st.columns(min(len(excel_templates), 4))
+    for idx, t_name in enumerate(excel_templates):
+        with cols[idx % 4]:
+            st.download_button(
+                label=f"⬇️ {t_name.replace('.xlsx', '').replace('_', ' ')}",
+                data=load_excel_template(t_name),
+                file_name=t_name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"dl_{t_name}"
+            )
+    st.markdown("<br>", unsafe_allow_html=True)
 
 excel_file = st.file_uploader(
     "Excel File (.xlsx)",
