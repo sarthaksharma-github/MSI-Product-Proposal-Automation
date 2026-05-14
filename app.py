@@ -377,8 +377,8 @@ st.markdown("#### Step 3 — Output Filename")
 st.caption("Name your output file. `.pptx` is added automatically.")
 
 output_name = st.text_input(
-    "Output Filename",
-    value="Final_Submissions",
+    "Output Filename (Optional)",
+    value="",
     placeholder="e.g. May_Fountain_Submissions"
 )
 
@@ -409,7 +409,8 @@ if st.button("🚀  Generate Slides"):
     if excel_file is None:
         st.error("⚠️ Please upload your Excel file before generating.")
     else:
-        fname = output_name.strip() or "Final_Submissions"
+        default_fname = f"{selected_template.replace('.pptx', '')}_Output"
+        fname = output_name.strip() or default_fname
         if not fname.endswith('.pptx'):
             fname += '.pptx'
 
