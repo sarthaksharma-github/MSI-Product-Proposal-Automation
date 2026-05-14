@@ -341,16 +341,23 @@ st.caption("Upload your Excel file. Any filename is accepted.")
 
 excel_templates = get_available_excel_templates()
 if excel_templates:
-    st.markdown("<p style='font-size: 13px; font-weight: 600; color: #2C1F14; margin-bottom: 5px;'>Need a template? Download one here:</p>", unsafe_allow_html=True)
-    cols = st.columns(min(len(excel_templates), 4))
-    for idx, t_name in enumerate(excel_templates):
-        with cols[idx % 4]:
+    st.markdown("<p style='font-size: 13px; font-weight: 600; color: #2C1F14; margin-bottom: 5px;'>Need an Excel template?</p>", unsafe_allow_html=True)
+    t_col1, t_col2 = st.columns([3, 1])
+    with t_col1:
+        selected_excel = st.selectbox(
+            "Select Excel Template",
+            options=excel_templates,
+            format_func=lambda x: x.replace('.xlsx', '').replace('_', ' '),
+            label_visibility="collapsed"
+        )
+    with t_col2:
+        if selected_excel:
             st.download_button(
-                label=f"⬇️ {t_name.replace('.xlsx', '').replace('_', ' ')}",
-                data=load_excel_template(t_name),
-                file_name=t_name,
+                label="⬇️ Download",
+                data=load_excel_template(selected_excel),
+                file_name=selected_excel,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key=f"dl_{t_name}"
+                key="dl_excel_template"
             )
     st.markdown("<br>", unsafe_allow_html=True)
 
