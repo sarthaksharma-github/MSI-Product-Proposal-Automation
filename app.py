@@ -237,19 +237,20 @@ def run_automation(excel_bytes, pptx_bytes, from_row, to_row):
         excel_row_num = original_idx + 2
 
         replacements = {
-            "[ITEM_NUM]":   safe_text(row.get('Item #', '')),
-            "[ITEM_NAME]":  safe_text(row.get('Name', '')),
-            "[RETAIL]":     safe_format(row.get('Unit Retail', 0), is_currency=True),
-            "[COST]":       safe_format(row.get('Unit Cost', 0), is_currency=True),
-            "[IMU]":        safe_format(row.get('IMU%', 0), is_percent=True),
+            "[ITEM_NUM]": safe_text(row.get('Item #', '')),
+            "[ITEM_NAME]": safe_text(row.get('Name', '')),
+            "[RETAIL]": safe_format(row.get('Retail', row.get('Unit Retail', 0)), is_currency=True),
+            "[COST]": safe_format(row.get('Unit Cost', 0), is_currency=True),
+            "[IMU]": safe_format(row.get('IMU%', 0), is_percent=True),
             "[PROJ_UNITS]": safe_format(row.get('Projected Sales Units', 0)),
-            "[PROJ_RTL]":   safe_format(row.get('Projected Sales Rtl', 0), is_currency=True),
-            "[FEAT_1]":     safe_text(row.get('Key Product Feature #1', '')),
-            "[FEAT_2]":     safe_text(row.get('Key Product Feature #2', '')),
-            "[FEAT_3]":     safe_text(row.get('Key Product Feature #3', '')),
-            "[BEN_1]":      safe_text(row.get('Associated Customer Benefit #1', '')),
-            "[BEN_2]":      safe_text(row.get('Associated Customer Benefit #2', '')),
-            "[BEN_3]":      safe_text(row.get('Associated Customer Benefit #3', '')),
+            "[PROJ_RTL]": safe_format(row.get('Projected Sales Rtl', 0), is_currency=True),
+            "[FEAT_1]": safe_text(row.get('Key Product Feature #1', '')),
+            "[FEAT_2]": safe_text(row.get('Key Product Feature #2', '')),
+            "[FEAT_3]": safe_text(row.get('Key Product Feature #3', '')),
+            "[BEN_1]": safe_text(row.get('Associated Customer Benefit #1', '')),
+            "[BEN_2]": safe_text(row.get('Associated Customer Benefit #2', '')),
+            "[BEN_3]": safe_text(row.get('Associated Customer Benefit #3', '')),
+            
             # --- New Mappings ---
             "[CATEGORY]": safe_text(row.get('Category', '')),
             "[DES]": safe_text(row.get('Description', '')),
