@@ -1,0 +1,426 @@
+# @title
+# ============================================================
+#  MSI SERVICES — SLIDE AUTOMATION TOOL v2.0
+#  Paste this entire code into ONE Google Colab cell.
+#  Then: View → Hide Code → Share the link with your team.
+# ============================================================
+
+# @title
+# ============================================================
+#  MSI SERVICES — SLIDE AUTOMATION TOOL v2.1 (Resilient Mode)
+# ============================================================
+
+!pip install python-pptx pandas openpyxl ipywidgets Pillow -q
+
+import pandas as pd
+import openpyxl
+from pptx import Presentation
+from pptx.util import Inches, Emu
+from PIL import Image as PILImage
+import ipywidgets as widgets
+from IPython.display import display, HTML, clear_output
+import io, copy, traceback
+
+# ══════════════════════════════════════════════════════════════
+#  CORE ENGINE
+# ══════════════════════════════════════════════════════════════
+
+def clone_slide(prs, source_slide):
+    new_slide = prs.slides.add_slide(source_slide.slide_layout)
+    sp_tree = new_slide.shapes._spTree
+    while len(sp_tree) > 2:
+        sp_tree.remove(sp_tree[-1])
+    source_sp_tree = source_slide.shapes._spTree
+    for el in list(source_sp_tree)[2:]:
+        sp_tree.append(copy.deepcopy(el))
+    return new_slide
+
+def get_excel_images(excel_bytes):
+    """Returns a dict of {row_number: image_data}"""
+    wb = openpyxl.load_workbook(io.BytesIO(excel_bytes))
+    ws = wb.active
+    image_map = {}
+    for img in ws._images:
+        try:
+            # openpyxl anchor row is 0-indexed.
+            # We add 1 to match standard Excel row numbering.
+            row = img.anchor._from.row + 1
+            image_map[row] = img._data()
+        except:
+            pass
+    return image_map
+
+def process_text_frame(tf, placeholders):
+    for para in tf.paragraphs:
+        for key, val in placeholders.items():
+            if key in para.text:
+                new_text = para.text.replace(key, str(val))
+                if para.runs:
+                    para.runs[0].text = new_text
+                    for i in range(1, len(para.runs)):
+                        para.runs[i].text = ""
+
+def replace_text_in_shape(shape, placeholders):
+    if shape.has_text_frame:
+        process_text_frame(shape.text_frame, placeholders)
+    elif shape.has_table:
+        for row in shape.table.rows:
+            for cell in row.cells:
+                process_text_frame(cell.text_frame, placeholders)
+
+def find_image_placeholder(slide):
+    for shape in slide.shapes:
+        if shape.has_text_frame:
+            text = shape.text_frame.text.lower()
+            if "insert product" in text or "picture here" in text:
+                return shape
+    return None
+
+def insert_image_into_placeholder(slide, img_bytes, placeholder):
+    left, top, width, height = placeholder.left, placeholder.top, placeholder.width, placeholder.height
+    placeholder.fill.background()
+    for para in placeholder.text_frame.paragraphs:
+        for run in para.runs: run.text = ""
+
+    img = PILImage.open(io.BytesIO(img_bytes)).convert('RGB')
+    img_w, img_h = img.size
+    target_ratio, img_ratio = width / height, img_w / img_h
+
+    if img_ratio > target_ratio:
+        new_h = int(img_w / target_ratio)
+        padded = PILImage.new('RGB', (img_w, new_h), (255, 255, 255))
+        padded.paste(img, (0, (new_h - img_h) // 2))
+    else:
+        new_w = int(img_h * target_ratio)
+        padded = PILImage.new('RGB', (new_w, img_h), (255, 255, 255))
+        padded.paste(img, ((new_w - img_w) // 2, 0))
+
+    output = io.BytesIO()
+    padded.save(output, format='JPEG', quality=95)
+    output.seek(0)
+    slide.shapes.add_picture(output, left, top, width, height)
+
+def safe_format(val, is_currency=False, is_percent=False):
+    try:
+        cleaned = str(val).replace('$','').replace(',','').replace('%','').strip()
+        num = 0.0 if (not cleaned or cleaned.lower() == 'nan') else float(cleaned)
+        if is_currency: return f"${num:,.2f}" if num % 1 != 0 else f"${num:,.0f}"
+        if is_percent: return f"{num:.0%}"
+        return f"{num:,.0f}"
+    except: return str(val)
+
+def safe_text(val):
+    v = str(val).strip()
+    return "" if v.lower() == 'nan' else v
+
+def run_automation(excel_bytes, pptx_bytes, from_row, to_row):
+    df = pd.read_excel(io.BytesIO(excel_bytes))
+
+    # Correcting the row selection logic
+    start_idx = max(0, from_row - 2) # Row 2 in Excel is index 0 in DF
+    end_idx = min(to_row - 1, len(df))
+    df_subset = df.iloc[start_idx:end_idx].copy()
+
+    if df_subset.empty:
+        raise ValueError("Selected row range contains no data.")
+
+    image_map = get_excel_images(excel_bytes)
+    prs = Presentation(io.BytesIO(pptx_bytes))
+    if len(prs.slides) != 1:
+        raise ValueError("Template must have exactly 1 slide.")
+
+    source_slide = prs.slides[0]
+    for _ in range(len(df_subset) - 1):
+        clone_slide(prs, source_slide)
+
+    for i, (original_idx, row) in enumerate(df_subset.iterrows()):
+        slide = prs.slides[i]
+        excel_row_num = original_idx + 2 # Header is 1, index 0 is row 2
+
+        replacements = {
+            "[ITEM_NUM]": safe_text(row.get('Item #', '')),
+            "[ITEM_NAME]": safe_text(row.get('Name', '')),
+            "[RETAIL]": safe_format(row.get('Retail', row.get('Unit Retail', 0)), is_currency=True),
+            "[COST]": safe_format(row.get('Unit Cost', 0), is_currency=True),
+            "[IMU]": safe_format(row.get('IMU%', 0), is_percent=True),
+            "[PROJ_UNITS]": safe_format(row.get('Projected Sales Units', 0)),
+            "[PROJ_RTL]": safe_format(row.get('Projected Sales Rtl', 0), is_currency=True),
+            "[FEAT_1]": safe_text(row.get('Key Product Feature #1', '')),
+            "[FEAT_2]": safe_text(row.get('Key Product Feature #2', '')),
+            "[FEAT_3]": safe_text(row.get('Key Product Feature #3', '')),
+            "[BEN_1]": safe_text(row.get('Associated Customer Benefit #1', '')),
+            "[BEN_2]": safe_text(row.get('Associated Customer Benefit #2', '')),
+            "[BEN_3]": safe_text(row.get('Associated Customer Benefit #3', '')),
+            
+            # --- New Mappings ---
+            "[CATEGORY]": safe_text(row.get('Category', '')),
+            "[DES]": safe_text(row.get('Description', '')),
+            "[MAT]": safe_text(row.get('Material', '')),
+            "[DIM]": safe_text(row.get('Dimensions', '')), 
+            "[COLOR]": safe_text(row.get('Color', '')),
+            "[COUNTRY]": safe_text(row.get('Country', '')),
+        }
+
+        for shape in slide.shapes:
+            replace_text_in_shape(shape, replacements)
+
+        # Check if an image exists for this specific Excel row
+        placeholder = find_image_placeholder(slide)
+        if excel_row_num in image_map:
+            if placeholder:
+                insert_image_into_placeholder(slide, image_map[excel_row_num], placeholder)
+        else:
+            # No image? Clear the placeholder text so it doesn't say "Insert Picture Here"
+            if placeholder:
+                for para in placeholder.text_frame.paragraphs:
+                    for run in para.runs: run.text = ""
+                placeholder.fill.background()
+
+    output = io.BytesIO()
+    prs.save(output)
+    return output.getvalue(), len(df_subset)
+
+
+
+# ══════════════════════════════════════════════════════════════
+#  UI
+# ══════════════════════════════════════════════════════════════
+
+display(HTML("""
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&display=swap');
+  .msi-tool {
+    font-family: 'DM Sans', sans-serif;
+    max-width: 660px;
+    margin: 32px auto;
+    background: #FFFFFF;
+    border: 1px solid #E4D6CA;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 4px 24px rgba(139,111,78,0.10);
+  }
+  .msi-header {
+    background: #8B6F4E;
+    padding: 22px 30px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .msi-logo { font-size: 26px; font-weight: 600; color: #FFFFFF; letter-spacing: 2px; }
+  .msi-header-text h1 { margin: 0; font-size: 15px; font-weight: 600; color: #FFFFFF; }
+  .msi-header-text p  { margin: 2px 0 0; font-size: 11px; color: #E4D6CA; font-weight: 300; }
+  .msi-body { padding: 28px 30px; }
+  .msi-section {
+    margin-bottom: 22px;
+    padding-bottom: 22px;
+    border-bottom: 1px solid #F0E8E0;
+  }
+  .msi-section:last-child { border-bottom: none; margin-bottom: 0; }
+  .msi-row { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 10px; }
+  .msi-num {
+    min-width: 26px; height: 26px;
+    background: #8B6F4E; color: white;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 600;
+    margin-top: 2px; flex-shrink: 0;
+  }
+  .msi-label { font-size: 13px; font-weight: 600; color: #2C1F14; margin-bottom: 3px; }
+  .msi-hint  { font-size: 11px; color: #9A8070; }
+  .msi-badge {
+    display: inline-block;
+    background: #FFF3E8; border: 1px solid #E4D6CA;
+    border-radius: 20px; padding: 3px 10px;
+    font-size: 10.5px; color: #8B6F4E; font-weight: 500; margin-left: 8px;
+  }
+  .msi-footer {
+    background: #F9F6F3; border-top: 1px solid #E4D6CA;
+    padding: 10px 30px; font-size: 10.5px; color: #9A8070; text-align: center;
+  }
+</style>
+
+<div class="msi-tool">
+  <div class="msi-header">
+    <div class="msi-logo">MSI</div>
+    <div class="msi-header-text">
+      <h1>Slide Automation Tool <span style="font-size:11px;opacity:0.7;font-weight:400;">v2.0</span></h1>
+      <p>Sales Support Operations &nbsp;·&nbsp; Making Dream Surfaces Attainable</p>
+    </div>
+  </div>
+  <div class="msi-body">
+
+    <div class="msi-section">
+      <div class="msi-row">
+        <div class="msi-num">1</div>
+        <div>
+          <div class="msi-label">Upload your Excel file <span class="msi-badge">includes images</span></div>
+          <div class="msi-hint">Product data + floating images in the Image column</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="msi-section">
+      <div class="msi-row">
+        <div class="msi-num">2</div>
+        <div>
+          <div class="msi-label">Upload your PowerPoint template <span class="msi-badge">single slide only</span></div>
+          <div class="msi-hint">Just one slide — the tool duplicates it automatically for each product</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="msi-section">
+      <div class="msi-row">
+        <div class="msi-num">3</div>
+        <div>
+          <div class="msi-label">Output filename</div>
+          <div class="msi-hint">What to name your file (.pptx added automatically)</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="msi-section">
+      <div class="msi-row">
+        <div class="msi-num">4</div>
+        <div>
+          <div class="msi-label">Row range <span class="msi-badge">optional</span></div>
+          <div class="msi-hint">Leave as default to process all rows. Change for a partial batch.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="msi-section">
+      <div class="msi-row">
+        <div class="msi-num">5</div>
+        <div>
+          <div class="msi-label">Generate slides</div>
+          <div class="msi-hint">The tool will build, fill, and prepare your file for download</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+  <div class="msi-footer">
+    MSI Services &nbsp;·&nbsp; Internal Tool &nbsp;·&nbsp; For issues contact Sales Support
+  </div>
+</div>
+"""))
+
+# ── Widgets ───────────────────────────────────────────────────
+excel_upload = widgets.FileUpload(
+    accept='.xlsx', multiple=False,
+    description='📊  Excel File',
+    layout=widgets.Layout(margin='0 0 16px 40px')
+)
+pptx_upload = widgets.FileUpload(
+    accept='.pptx', multiple=False,
+    description='📋  PPT Template',
+    layout=widgets.Layout(margin='0 0 16px 40px')
+)
+filename_input = widgets.Text(
+    value='Final_Submissions',
+    placeholder='e.g. May_Fountain_Submissions',
+    layout=widgets.Layout(width='320px', margin='0 0 16px 40px')
+)
+from_input = widgets.BoundedIntText(
+    value=1, min=1, max=9999,
+    description='From row:',
+    layout=widgets.Layout(width='160px', margin='0 0 16px 40px')
+)
+to_input = widgets.BoundedIntText(
+    value=9999, min=1, max=9999,
+    description='To row:',
+    layout=widgets.Layout(width='160px', margin='0 0 16px 10px')
+)
+row_range_box = widgets.HBox([from_input, to_input])
+run_btn = widgets.Button(
+    description='🚀  Generate Slides',
+    layout=widgets.Layout(width='210px', height='40px', margin='0 0 0 40px'),
+    style=dict(button_color='#8B6F4E', font_weight='600')
+)
+output_area = widgets.Output()
+
+# ── HTML helpers ──────────────────────────────────────────────
+def _error(msg):
+    return f"""<div style="font-family:'DM Sans',sans-serif;max-width:580px;margin:6px 0 0 40px;
+        background:#FEF0F0;border:1px solid #E57373;border-radius:8px;
+        padding:13px 16px;font-size:13px;color:#8B1A1A;">⚠️ &nbsp; {msg}</div>"""
+
+def _info(msg):
+    return f"""<div style="font-family:'DM Sans',sans-serif;max-width:580px;margin:6px 0 0 40px;
+        background:#F9F6F3;border:1px solid #E4D6CA;border-radius:8px;
+        padding:13px 16px;font-size:13px;color:#5A4535;">{msg}</div>"""
+
+def _success(count, fname):
+    return f"""
+    <div style="font-family:'DM Sans',sans-serif;max-width:580px;margin:6px 0 0 40px;
+        background:#F0FAF3;border:1px solid #4CAF50;border-radius:8px;
+        padding:18px 20px;font-size:13px;color:#1A5C2A;">
+      <div style="font-size:15px;font-weight:600;margin-bottom:6px;">
+        ✅ &nbsp; Done! {count} slide{'s' if count > 1 else ''} generated.
+      </div>
+      <div style="color:#2D7A4F;margin-bottom:12px;">
+        File ready: <strong>{fname}</strong>
+      </div>
+      <div style="background:#fff;border:1px solid #C8E6C9;border-radius:6px;
+                  padding:10px 14px;font-size:12px;color:#5A4535;line-height:1.8;">
+        <strong>To download:</strong><br>
+        1. Click the 📁 folder icon in the left Colab sidebar<br>
+        2. Find <strong>{fname}</strong><br>
+        3. Right-click → <strong>Download</strong>
+      </div>
+    </div>"""
+
+# ── Button handler ────────────────────────────────────────────
+def on_run(b):
+    with output_area:
+        clear_output()
+
+        if not excel_upload.value:
+            display(HTML(_error("Please upload your <strong>Excel file</strong> first.")))
+            return
+        if not pptx_upload.value:
+            display(HTML(_error("Please upload your <strong>PowerPoint template</strong> first.")))
+            return
+
+        fname = filename_input.value.strip() or "Final_Submissions"
+        if not fname.endswith('.pptx'):
+            fname += '.pptx'
+
+        display(HTML(_info("⏳ &nbsp; Building your slides... please wait.")))
+
+        try:
+            excel_bytes = bytes(list(excel_upload.value.values())[0]['content'])
+            pptx_bytes  = bytes(list(pptx_upload.value.values())[0]['content'])
+
+            result_bytes, count = run_automation(
+                excel_bytes, pptx_bytes,
+                from_row=from_input.value,
+                to_row=to_input.value
+            )
+
+            with open(fname, 'wb') as f:
+                f.write(result_bytes)
+
+            clear_output()
+            display(HTML(_success(count, fname)))
+
+        except ValueError as e:
+            clear_output()
+            display(HTML(_error(str(e).replace('\n', '<br>'))))
+        except Exception as e:
+            clear_output()
+            display(HTML(_error(
+                f"Something went wrong:<br><code>{str(e)}</code><br><br>"
+                f"<span style='font-size:11px;color:#A05050'>"
+                f"Check your file formats and column names, then try again.</span>"
+            )))
+
+run_btn.on_click(on_run)
+
+display(excel_upload)
+display(pptx_upload)
+display(filename_input)
+display(row_range_box)
+display(run_btn)
+display(output_area)

@@ -1,0 +1,118 @@
+
+# ==========================================
+# STEP 1: INSTALL REQUIRED LIBRARIES
+# ==========================================
+!pip install python-pptx pandas openpyxl
+
+# ==========================================
+# STEP 2: IMPORT LIBRARIES & LOAD FILES
+# ==========================================
+import pandas as pd
+from pptx import Presentation
+
+print("Reading files...")
+
+# Ensure your files are uploaded to Colab
+df = pd.read_excel('/content/data.xlsx')
+prs = Presentation('/content/template.pptx')
+
+# ==========================================
+# STEP 3: TEXT BOX & TABLE REPLACEMENT ENGINE
+# ==========================================
+def process_text_frame(text_frame, placeholders):
+    """The core engine that protects our fonts."""
+    for paragraph in text_frame.paragraphs:
+        for placeholder_key, replacement_value in placeholders.items():
+            if placeholder_key in paragraph.text:
+                new_text = paragraph.text.replace(placeholder_key, str(replacement_value))
+                if len(paragraph.runs) > 0:
+                    paragraph.runs[0].text = new_text
+                    for i in range(1, len(paragraph.runs)):
+                        paragraph.runs[i].text = ""
+
+def replace_text_in_shape(shape, placeholders):
+    """The traffic cop that checks if a shape is a box or a table."""
+    # 1. If it's a standard text box, process it normally
+    if shape.has_text_frame:
+        process_text_frame(shape.text_frame, placeholders)
+
+    # 2. NEW: If it's a Table, loop through the rows and cells!
+    elif shape.has_table:
+        for row in shape.table.rows:
+            for cell in row.cells:
+                process_text_frame(cell.text_frame, placeholders)
+
+# ==========================================
+# STEP 4: DATA SHIELDS
+# ==========================================
+def safe_format(val, is_currency=False, is_percent=False):
+    cleaned = str(val).replace('$', '').replace(',', '').replace('%', '').strip()
+    if not cleaned or cleaned.lower() == 'nan':
+        num = 0.0
+    else:
+        num = float(cleaned)
+
+    if is_currency:
+        return f"${num:,.2f}" if num % 1 != 0 else f"${num:,.0f}"
+    elif is_percent:
+        return f"{num:.0%}"
+    else:
+        return f"{num:,.0f}"
+
+def safe_text(val):
+    text_val = str(val).strip()
+    if text_val.lower() == 'nan':
+        return ""
+    return text_val
+
+# ==========================================
+# STEP 5: ROW-TO-SLIDE MATCHING
+# ==========================================
+print("Processing your products...")
+
+for (index, row), slide in zip(df.iterrows(), prs.slides):
+
+    item_val = safe_text(row['Item #'])
+    name_val = safe_text(row['Name'])
+
+    retail_val = safe_format(row['Unit Retail'], is_currency=True)
+    cost_val = safe_format(row['Unit Cost'], is_currency=True)
+    imu_val = safe_format(row['IMU%'], is_percent=True)
+    units_val = safe_format(row['Projected Sales Units'])
+    proj_rtl_val = safe_format(row['Projected Sales Rtl'], is_currency=True)
+
+    feat1_val = safe_text(row['Key Product Feature #1'])
+    feat2_val = safe_text(row['Key Product Feature #2'])
+    feat3_val = safe_text(row['Key Product Feature #3'])
+
+    ben1_val = safe_text(row['Associated Customer Benefit #1'])
+    ben2_val = safe_text(row['Associated Customer Benefit #2'])
+    ben3_val = safe_text(row['Associated Customer Benefit #3'])
+
+    replacements = {
+        "[ITEM_NUM]": item_val,
+        "[ITEM_NAME]": name_val,
+        "[RETAIL]": retail_val,
+        "[COST]": cost_val,
+        "[IMU]": imu_val,
+        "[PROJ_UNITS]": units_val,
+        "[PROJ_RTL]": proj_rtl_val,
+        "[FEAT_1]": feat1_val,
+        "[FEAT_2]": feat2_val,
+        "[FEAT_3]": feat3_val,
+        "[BEN_1]": ben1_val,
+        "[BEN_2]": ben2_val,
+        "[BEN_3]": ben3_val
+    }
+
+    for shape in slide.shapes:
+        replace_text_in_shape(shape, replacements)
+
+# ==========================================
+# STEP 6: SAVE THE FINAL FILE
+# ==========================================
+output_filename = 'Final_Table_Submissions.pptx'
+prs.save(output_filename)
+
+print("Success! Your tables are now populated and ready for download.")
+
