@@ -10,6 +10,7 @@ from pptx import Presentation
 from pptx.util import Inches, Emu
 from PIL import Image as PILImage
 import io, copy, os, traceback, re, json, base64
+import streamlit.components.v1 as components
 
 # ══════════════════════════════════════════════════════════════
 #  PAGE CONFIG
@@ -385,7 +386,11 @@ def render_slide_preview(mapping_dict, excel_row=None, image_bytes=None, is_temp
         </div>
     </div>
     """
-    st.markdown(html_content, unsafe_allow_html=True)
+    components.html(
+        f"""<!DOCTYPE html><html><head><link href='https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&display=swap' rel='stylesheet'></head><body style='margin:0;padding:0;background:transparent;'>{html_content}</body></html>""",
+        height=420,
+        scrolling=False
+    )
 
 def run_automation(excel_bytes, pptx_bytes, from_row, to_row, mapping_dict, image_tag):
     df = pd.read_excel(io.BytesIO(excel_bytes))
@@ -583,48 +588,58 @@ if excel_file is not None:
         with map_col:
             st.markdown("**Placeholder Mappings**")
             
+            BLANK_OPTION = "— (Not mapped) —"
+            col_options = [BLANK_OPTION] + excel_columns
+
             for tag in detected_tags:
                 tag_clean = tag.replace("[", "").replace("]", "").replace("_", " ").lower()
-                
+
                 default_col = None
                 default_format = "Text"
+
+                # 1. Load from saved config first
                 if tag in saved_mappings:
-                    default_col = saved_mappings[tag].get("column")
+                    saved_col = saved_mappings[tag].get("column")
+                    if saved_col in excel_columns:
+                        default_col = saved_col
                     default_format = saved_mappings[tag].get("format", "Text")
-                    
-                if default_col not in excel_columns:
-                    default_col = None
+
+                # 2. Auto-match only if no saved config for this tag
+                if default_col is None and tag not in saved_mappings:
                     for col in excel_columns:
                         col_lower = str(col).lower()
-                        if tag_clean in col_lower or col_lower in tag_clean:
-                            default_col = col
-                            break
-                            
-                    if not default_col:
-                        if "num" in tag_clean and any(x in str(c).lower() for c in excel_columns for x in ["item #", "item number", "sku", "id"]):
-                            default_col = next(c for c in excel_columns if any(x in str(c).lower() for x in ["item #", "item number", "sku", "id"]))
-                        elif "name" in tag_clean and any(x in str(c).lower() for c in excel_columns for x in ["name", "title", "description"]):
-                            default_col = next(c for c in excel_columns if any(x in str(c).lower() for x in ["name", "title", "description"]))
-                            
-                if default_format == "Text" and tag not in saved_mappings:
+                        # Require a meaningful overlap: tag_clean must be contained in col or vice versa
+                        # but only if both strings are at least 3 chars to avoid noise
+                        if len(tag_clean) >= 3 and len(col_lower) >= 3:
+                            if tag_clean in col_lower or col_lower in tag_clean:
+                                default_col = col
+                                break
+
+                # 3. Auto-detect format from tag name
+                if tag not in saved_mappings:
                     tag_l = tag.lower()
                     if any(x in tag_l for x in ["retail", "cost", "price", "rtl", "amt", "value"]):
                         default_format = "Currency"
                     elif any(x in tag_l for x in ["imu", "percent", "pct", "%"]):
                         default_format = "Percentage"
-                    elif any(x in tag_l for x in ["units", "qty", "count", "num"]):
+                    elif any(x in tag_l for x in ["units", "qty", "count"]):
                         default_format = "Integer"
-                
-                col_idx = excel_columns.index(default_col) if default_col in excel_columns else 0
-                
+
+                # 4. Compute index into col_options (which has BLANK_OPTION at index 0)
+                if default_col in excel_columns:
+                    col_idx = excel_columns.index(default_col) + 1  # +1 because BLANK_OPTION is at 0
+                else:
+                    col_idx = 0  # Select "— (Not mapped) —"
+
                 c1, c2 = st.columns([2, 1])
                 with c1:
-                    mapped_col_name = st.selectbox(
+                    selected_option = st.selectbox(
                         f"Map {tag}",
-                        options=excel_columns,
+                        options=col_options,
                         index=col_idx,
                         key=f"map_{tag}"
                     )
+                    mapped_col_name = "" if selected_option == BLANK_OPTION else selected_option
                 with c2:
                     format_options = ["Text", "Currency", "Percentage", "Integer"]
                     fmt_idx = format_options.index(default_format) if default_format in format_options else 0
@@ -634,7 +649,7 @@ if excel_file is not None:
                         index=fmt_idx,
                         key=f"fmt_{tag}"
                     )
-                
+
                 mapping_dict[tag] = {"column": mapped_col_name, "format": mapped_format}
                 
             st.markdown("---")
