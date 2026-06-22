@@ -189,6 +189,14 @@ def safe_format(val, is_currency=False, is_percent=False):
 
 
 def safe_text(val):
+    # If the value is a whole-number float (e.g. 7005.0), convert to int first
+    # so it renders as "7005" instead of "7005.0".
+    try:
+        f = float(val)
+        if f == int(f):
+            val = int(f)
+    except (ValueError, TypeError):
+        pass
     v = str(val).strip()
     return "" if v.lower() == 'nan' else v
 
