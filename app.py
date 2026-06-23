@@ -136,18 +136,23 @@ def clone_slide(prs, source_slide):
     return new_slide
 
 def get_excel_images(excel_bytes):
-    """Returns {(excel_row, excel_col): img_bytes} so multiple images per row are supported."""
+    """Returns {col_0based: [img_bytes sorted by anchor row]} for positional assignment."""
     wb = openpyxl.load_workbook(io.BytesIO(excel_bytes))
     ws = wb.active
-    image_map = {}  # key: (row, col) both 0-based matching pandas column index
+    raw = []  # list of (row, col, img_bytes)
     for img in ws._images:
         try:
-            row = img.anchor._from.row   # 0-based row index (row 1 of data = index 1)
-            col = img.anchor._from.col   # 0-based col index matches pandas column index
-            image_map[(row, col)] = img._data()
+            row = img.anchor._from.row
+            col = img.anchor._from.col
+            raw.append((row, col, img._data()))
         except:
             pass
-    return image_map
+    # Sort by row so product 0 = first image, product 1 = second, etc.
+    raw.sort(key=lambda x: x[0])
+    col_to_images = {}
+    for row, col, img_bytes in raw:
+        col_to_images.setdefault(col, []).append(img_bytes)
+    return col_to_images
 
 def detect_image_tags(detected_tags):
     """Separate tags that look like image placeholders ([IMAGE], [IMAGE 1], [IMAGE_2], etc.) from text tags."""
@@ -157,44 +162,67 @@ def detect_image_tags(detected_tags):
     return text_tags, img_tags
 
 def build_auto_mapping(text_tags, img_tags, excel_columns):
-    """Automatically maps placeholder tags to Excel columns without any user input.
-    Rules:
-      - [IMAGE...] tags  → matched to image-named columns by name similarity
-      - Tags with retail/price/cost → Currency format
-      - Everything else  → Text format
+    """Automatically maps placeholder tags to Excel columns.
+    - Number-aware: [FEAT_2] matches 'Feature 2' but NOT 'Feature 3'
+    - [IMAGE...] tags matched positionally to image-named columns
+    - retail/price/cost tags → Currency, everything else → Text
     """
     def _normalize(s):
-        """Lowercase, strip brackets/underscores, collapse spaces."""
         s = re.sub(r'[\[\]_]', ' ', str(s))
-        s = re.sub(r'\s+', ' ', s).strip().lower()
-        return s
+        return re.sub(r'\s+', ' ', s).strip().lower()
+
+    def _extract_number(s):
+        m = re.search(r'(\d+)\s*$', s.strip())
+        return int(m.group(1)) if m else None
 
     def _best_col_match(tag_norm, columns):
-        """Return the best-matching column name, or '' if no reasonable match."""
-        tag_words = set(tag_norm.split())
-        best_col, best_score = '', 0
+        tag_words_all = set(tag_norm.split())
+        tag_num = _extract_number(tag_norm)
+        # Root words = non-numeric words
+        tag_roots = {w for w in tag_words_all if not w.isdigit()}
+
+        best_col, best_score = '', -999
         for col in columns:
             col_norm = _normalize(col)
-            col_words = set(col_norm.split())
-            # Word-level overlap score
-            overlap = len(tag_words & col_words)
+            col_words_all = set(col_norm.split())
+            col_num = _extract_number(col_norm)
+            col_roots = {w for w in col_words_all if not w.isdigit()}
+
+            # Require at least one root word to partially match (substring check)
+            root_hit = any(
+                tr in cr or cr in tr
+                for tr in tag_roots for cr in col_roots
+            )
+            if not root_hit:
+                continue  # no semantic overlap at all — skip
+
+            score = 1  # base: root words overlap
+
+            # Number handling — critical for FEAT_1 vs FEAT_2, IMAGE 1 vs IMAGE 2
+            if tag_num is not None and col_num is not None:
+                if tag_num == col_num:
+                    score += 5   # strong match
+                else:
+                    score -= 10  # heavy penalty: wrong number is a strong signal to skip
+            elif tag_num is not None and col_num is None:
+                score -= 1   # tag has number, col doesn't — mild penalty
+
             # Substring bonus
             if tag_norm in col_norm or col_norm in tag_norm:
-                overlap += 2
-            if overlap > best_score:
-                best_score = overlap
+                score += 2
+
+            if score > best_score:
+                best_score = score
                 best_col = col
+
         return best_col if best_score > 0 else ''
 
     mapping_dict = {}
     image_mappings = {}
 
-    # --- Text tags ---
     for tag in text_tags:
         tag_norm = _normalize(tag)
         matched_col = _best_col_match(tag_norm, excel_columns)
-
-        # Format detection from tag name
         tag_l = tag.lower()
         if any(x in tag_l for x in ['retail', 'cost', 'price', 'rtl', 'amt', 'value']):
             fmt = 'Currency'
@@ -204,10 +232,8 @@ def build_auto_mapping(text_tags, img_tags, excel_columns):
             fmt = 'Integer'
         else:
             fmt = 'Text'
-
         mapping_dict[tag] = {'column': matched_col, 'format': fmt}
 
-    # --- Image tags ---
     for img_tag in img_tags:
         tag_norm = _normalize(img_tag)
         matched_col = _best_col_match(tag_norm, excel_columns)
@@ -224,6 +250,22 @@ def process_text_frame(tf, placeholders):
                     para.runs[0].text = new_text
                     for i in range(1, len(para.runs)):
                         para.runs[i].text = ""
+
+def purge_empty_paragraphs(shape):
+    """Remove paragraphs whose text is empty (blank bullet points from empty data values).
+    Keeps at least one paragraph so the shape stays valid."""
+    if not shape.has_text_frame:
+        return
+    tf = shape.text_frame
+    txBody = tf._txBody
+    all_paras = tf.paragraphs
+    if len(all_paras) <= 1:
+        return  # Never remove the last paragraph
+    for para in list(all_paras):
+        # Check all run text concatenated
+        run_text = ''.join(r.text or '' for r in para.runs).strip()
+        if run_text == '' and len(tf.paragraphs) > 1:
+            txBody.remove(para._p)
 
 def replace_text_in_shape(shape, placeholders):
     if shape.has_text_frame:
@@ -487,8 +529,10 @@ def run_automation(excel_bytes, pptx_bytes, from_row, to_row, mapping_dict, imag
     if df_subset.empty:
         raise ValueError("Selected row range contains no data.")
 
-    image_map = get_excel_images(excel_bytes)  # {(row_0based, col_0based): bytes}
-    df_cols = list(pd.read_excel(io.BytesIO(excel_bytes)).columns)  # column name -> index
+    # col_to_images: {col_0based: [img_bytes in row order]}
+    col_to_images = get_excel_images(excel_bytes)
+    df_cols = list(df.columns)
+
     prs = Presentation(io.BytesIO(pptx_bytes))
     if len(prs.slides) != 1:
         raise ValueError("Template must have exactly 1 slide.")
@@ -499,9 +543,8 @@ def run_automation(excel_bytes, pptx_bytes, from_row, to_row, mapping_dict, imag
 
     for i, (original_idx, row) in enumerate(df_subset.iterrows()):
         slide = prs.slides[i]
-        # Excel image rows are 0-based; data starts at row index 1 (row 2 in Excel = index 1)
-        excel_row_0 = original_idx + 1  # +1 because header is row 0
 
+        # ── Text replacements ──
         replacements = {}
         for tag, cfg in mapping_dict.items():
             col = cfg.get("column", "")
@@ -524,14 +567,20 @@ def run_automation(excel_bytes, pptx_bytes, from_row, to_row, mapping_dict, imag
         for shape in slide.shapes:
             replace_text_in_shape(shape, replacements)
 
-        # Handle each image placeholder independently
+        # Remove blank bullet paragraphs left by empty-value replacements
+        for shape in slide.shapes:
+            purge_empty_paragraphs(shape)
+
+        # ── Image placeholders ── positional: i-th product gets i-th image per col
         if image_mappings:
             for img_tag, col_name in image_mappings.items():
                 if not col_name or col_name not in df_cols:
                     continue
                 col_idx = df_cols.index(col_name)
-                img_bytes = image_map.get((excel_row_0, col_idx))
-                # Find the shape in this slide that contains the img_tag text
+                imgs = col_to_images.get(col_idx, [])
+                img_bytes = imgs[i] if i < len(imgs) else None
+
+                # Find the placeholder shape that still has the tag text
                 ph_shape = None
                 for shape in slide.shapes:
                     if shape.has_text_frame and img_tag in shape.text_frame.text:
@@ -546,13 +595,12 @@ def run_automation(excel_bytes, pptx_bytes, from_row, to_row, mapping_dict, imag
                                 run.text = ""
                         ph_shape.fill.background()
         else:
-            # Fallback: detect by text
+            # Fallback: auto-detect by shape text
             placeholder = find_image_placeholder(slide)
             if placeholder:
-                # Try first available image for this row
-                row_images = {k: v for k, v in image_map.items() if k[0] == excel_row_0}
-                if row_images:
-                    img_bytes = next(iter(row_images.values()))
+                all_imgs = [b for imgs in col_to_images.values() for b in imgs]
+                img_bytes = all_imgs[i] if i < len(all_imgs) else None
+                if img_bytes:
                     insert_image_into_placeholder(slide, img_bytes, placeholder)
                 else:
                     for para in placeholder.text_frame.paragraphs:
