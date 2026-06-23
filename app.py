@@ -1,5 +1,5 @@
 # ============================================================
-#  MSI SERVICES — SLIDE AUTOMATION TOOL v3.2
+#  MSI SERVICES — SLIDE AUTOMATION TOOL v3.3
 #  Streamlit App
 # ============================================================
 
@@ -113,7 +113,7 @@ st.markdown("""
 <div class="msi-header">
   <div class="msi-logo">MSI</div>
   <div>
-    <p class="msi-header-title">Slide Automation Tool <span style="font-size:11px;opacity:0.7;font-weight:400;">v3.2</span></p>
+    <p class="msi-header-title">Slide Automation Tool <span style="font-size:11px;opacity:0.7;font-weight:400;">v3.3</span></p>
     <p class="msi-header-sub">Sales Support Operations &nbsp;·&nbsp; Making Dream Surfaces Attainable</p>
   </div>
 </div>
@@ -155,6 +155,65 @@ def detect_image_tags(detected_tags):
     img_tags = [t for t in detected_tags if image_pattern.match(t)]
     text_tags = [t for t in detected_tags if not image_pattern.match(t)]
     return text_tags, img_tags
+
+def build_auto_mapping(text_tags, img_tags, excel_columns):
+    """Automatically maps placeholder tags to Excel columns without any user input.
+    Rules:
+      - [IMAGE...] tags  → matched to image-named columns by name similarity
+      - Tags with retail/price/cost → Currency format
+      - Everything else  → Text format
+    """
+    def _normalize(s):
+        """Lowercase, strip brackets/underscores, collapse spaces."""
+        s = re.sub(r'[\[\]_]', ' ', str(s))
+        s = re.sub(r'\s+', ' ', s).strip().lower()
+        return s
+
+    def _best_col_match(tag_norm, columns):
+        """Return the best-matching column name, or '' if no reasonable match."""
+        tag_words = set(tag_norm.split())
+        best_col, best_score = '', 0
+        for col in columns:
+            col_norm = _normalize(col)
+            col_words = set(col_norm.split())
+            # Word-level overlap score
+            overlap = len(tag_words & col_words)
+            # Substring bonus
+            if tag_norm in col_norm or col_norm in tag_norm:
+                overlap += 2
+            if overlap > best_score:
+                best_score = overlap
+                best_col = col
+        return best_col if best_score > 0 else ''
+
+    mapping_dict = {}
+    image_mappings = {}
+
+    # --- Text tags ---
+    for tag in text_tags:
+        tag_norm = _normalize(tag)
+        matched_col = _best_col_match(tag_norm, excel_columns)
+
+        # Format detection from tag name
+        tag_l = tag.lower()
+        if any(x in tag_l for x in ['retail', 'cost', 'price', 'rtl', 'amt', 'value']):
+            fmt = 'Currency'
+        elif any(x in tag_l for x in ['imu', 'percent', 'pct', '%']):
+            fmt = 'Percentage'
+        elif any(x in tag_l for x in ['units', 'qty', 'count']):
+            fmt = 'Integer'
+        else:
+            fmt = 'Text'
+
+        mapping_dict[tag] = {'column': matched_col, 'format': fmt}
+
+    # --- Image tags ---
+    for img_tag in img_tags:
+        tag_norm = _normalize(img_tag)
+        matched_col = _best_col_match(tag_norm, excel_columns)
+        image_mappings[img_tag] = matched_col
+
+    return mapping_dict, image_mappings
 
 def process_text_frame(tf, placeholders):
     for para in tf.paragraphs:
@@ -630,160 +689,21 @@ excel_file = st.file_uploader(
 
 st.divider()
 
-# ══════════════════════════════════════════════════════════════
-#  UI — STEP 2.5: INTERACTIVE COLUMN MAPPING & LIVE PREVIEW
-# ══════════════════════════════════════════════════════════════
-
+# Auto-mapping is built silently once the Excel file is uploaded
 mapping_dict = {}
 image_mappings = {}  # {img_tag: excel_col_name}
 
 if excel_file is not None:
-    st.markdown("#### Step 2.5 — Map Columns & Preview")
-    st.caption("Customize how placeholders on the slide link to Excel columns. Preview changes in real-time.")
-
-    excel_bytes = excel_file.getvalue()
-    pptx_bytes = get_pptx_bytes()
-    
-    detected_tags = extract_placeholders_from_pptx(pptx_bytes)
-    
     try:
-        df = pd.read_excel(io.BytesIO(excel_bytes))
-        excel_columns = list(df.columns)
-    except Exception as e:
-        st.error(f"Error reading Excel file: {e}")
-        st.stop()
-        
-    if not detected_tags:
-        st.info("No placeholders (like `[TAG]`) found in the template. Processing as-is.")
-    else:
-        saved_config = load_mapping_config()
-        saved_mappings = saved_config.get("mappings", {})
-        saved_image_mappings = saved_config.get("image_mappings", {})
-        
-        map_col, prev_col = st.columns([1, 1.2])
-        
-        with map_col:
-            # Split tags into text tags and image tags
-            text_tags, img_tags = detect_image_tags(detected_tags)
-
-            st.markdown("**Text Placeholder Mappings**")
-            BLANK_OPTION = "— (Not mapped) —"
-            col_options = [BLANK_OPTION] + excel_columns
-
-            for tag in text_tags:
-                tag_clean = tag.replace("[", "").replace("]", "").replace("_", " ").lower()
-
-                default_col = None
-                default_format = "Text"
-
-                # 1. Load from saved config first
-                if tag in saved_mappings:
-                    saved_col = saved_mappings[tag].get("column")
-                    if saved_col in excel_columns:
-                        default_col = saved_col
-                    default_format = saved_mappings[tag].get("format", "Text")
-
-                # 2. Auto-match only if no saved config for this tag
-                if default_col is None and tag not in saved_mappings:
-                    for col in excel_columns:
-                        col_lower = str(col).lower()
-                        # Require a meaningful overlap: tag_clean must be contained in col or vice versa
-                        # but only if both strings are at least 3 chars to avoid noise
-                        if len(tag_clean) >= 3 and len(col_lower) >= 3:
-                            if tag_clean in col_lower or col_lower in tag_clean:
-                                default_col = col
-                                break
-
-                # 3. Auto-detect format from tag name
-                if tag not in saved_mappings:
-                    tag_l = tag.lower()
-                    if any(x in tag_l for x in ["retail", "cost", "price", "rtl", "amt", "value"]):
-                        default_format = "Currency"
-                    elif any(x in tag_l for x in ["imu", "percent", "pct", "%"]):
-                        default_format = "Percentage"
-                    elif any(x in tag_l for x in ["units", "qty", "count"]):
-                        default_format = "Integer"
-
-                # 4. Compute index into col_options (which has BLANK_OPTION at index 0)
-                if default_col in excel_columns:
-                    col_idx = excel_columns.index(default_col) + 1  # +1 because BLANK_OPTION is at 0
-                else:
-                    col_idx = 0  # Select "— (Not mapped) —"
-
-                c1, c2 = st.columns([2, 1])
-                with c1:
-                    selected_option = st.selectbox(
-                        f"Map {tag}",
-                        options=col_options,
-                        index=col_idx,
-                        key=f"map_{tag}"
-                    )
-                    mapped_col_name = "" if selected_option == BLANK_OPTION else selected_option
-                with c2:
-                    format_options = ["Text", "Currency", "Percentage", "Integer"]
-                    fmt_idx = format_options.index(default_format) if default_format in format_options else 0
-                    mapped_format = st.selectbox(
-                        "Format",
-                        options=format_options,
-                        index=fmt_idx,
-                        key=f"fmt_{tag}"
-                    )
-
-                mapping_dict[tag] = {"column": mapped_col_name, "format": mapped_format}
-                
-            # ── Image placeholder mappings ──
-            st.markdown("---")
-            st.markdown("**Image Placeholder Mappings**")
-            if img_tags:
-                st.caption("Map each image placeholder tag to the Excel column that contains that image.")
-                for img_tag in img_tags:
-                    saved_img_col = saved_image_mappings.get(img_tag, "")
-                    img_col_idx = (excel_columns.index(saved_img_col) + 1) if saved_img_col in excel_columns else 0
-                    c1, _ = st.columns([2, 1])
-                    with c1:
-                        sel = st.selectbox(
-                            f"Image column for {img_tag}",
-                            options=col_options,
-                            index=img_col_idx,
-                            key=f"imgmap_{img_tag}"
-                        )
-                        image_mappings[img_tag] = "" if sel == BLANK_OPTION else sel
-            else:
-                st.caption("No `[IMAGE...]` tags found in template. The app will auto-detect image placeholders by shape text.")
-
-            if st.button("💾 Save Mapping Configuration"):
-                config_to_save = {
-                    "mappings": mapping_dict,
-                    "image_mappings": image_mappings
-                }
-                save_mapping_config(config_to_save)
-                st.success("Configuration saved successfully!")
-                
-        with prev_col:
-            st.markdown("**Live Slide Preview**")
-            preview_mode = st.radio(
-                "Preview Mode",
-                options=["Template View (Placeholders)", "Data View (First Product Row)"],
-                horizontal=True
-            )
-            
-            is_template = (preview_mode == "Template View (Placeholders)")
-            first_row = df.iloc[0].to_dict() if len(df) > 0 else None
-
-            image_map_preview = get_excel_images(excel_bytes)
-            # First data row is 0-based row index 1 (header=0, first data=1)
-            first_row_idx = 1
-
-            render_slide_preview(
-                mapping_dict=mapping_dict,
-                image_mappings=image_mappings,
-                excel_row=first_row,
-                image_map=image_map_preview,
-                excel_row_idx=first_row_idx,
-                is_template_mode=is_template
-            )
-            
-    st.divider()
+        _excel_bytes_am = excel_file.getvalue()
+        _pptx_bytes_am = get_pptx_bytes()
+        _detected_tags = extract_placeholders_from_pptx(_pptx_bytes_am)
+        _df_am = pd.read_excel(io.BytesIO(_excel_bytes_am))
+        _excel_columns_am = list(_df_am.columns)
+        _text_tags_am, _img_tags_am = detect_image_tags(_detected_tags)
+        mapping_dict, image_mappings = build_auto_mapping(_text_tags_am, _img_tags_am, _excel_columns_am)
+    except Exception as _e:
+        st.warning(f"Auto-mapping could not be built: {_e}")
 
 # ══════════════════════════════════════════════════════════════
 #  UI — STEP 3: OUTPUT FILENAME
