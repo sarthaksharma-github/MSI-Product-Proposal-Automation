@@ -375,19 +375,14 @@ def clone_slide(prs, source_slide):
 def get_excel_images(excel_bytes):
     wb = openpyxl.load_workbook(io.BytesIO(excel_bytes))
     ws = wb.active
-    raw = []
+    image_map = {}
     for img in ws._images:
         try:
-            row = img.anchor._from.row
-            col = img.anchor._from.col
-            raw.append((row, col, img._data()))
+            row = img.anchor._from.row + 1
+            image_map[row] = img._data()
         except:
             pass
-    raw.sort(key=lambda x: x[0])
-    col_to_images = {}
-    for row, col, img_bytes in raw:
-        col_to_images.setdefault(col, []).append(img_bytes)
-    return col_to_images
+    return image_map
 
 def parse_placeholder_tag(full_tag):
     inner = full_tag.strip().lstrip('[').rstrip(']').strip()
@@ -655,14 +650,9 @@ def render_slide_preview(pptx_bytes, mapping_dict, image_mappings=None, excel_ro
                         break
 
             if is_img_ph and img_tag_matched:
-                col_name = image_mappings[img_tag_matched]
                 img_bytes_val = None
-                if not is_template_mode and excel_row is not None and col_name:
-                    cols = list(excel_row.keys())
-                    if col_name in cols:
-                        col_idx = cols.index(col_name)
-                        if excel_row_idx is not None and col_idx is not None:
-                            img_bytes_val = image_map.get((excel_row_idx, col_idx))
+                if not is_template_mode and excel_row_idx is not None:
+                    img_bytes_val = image_map.get(excel_row_idx + 2)
                             
                 if img_bytes_val:
                     b64 = base64.b64encode(img_bytes_val).decode('utf-8')
@@ -777,44 +767,10 @@ def run_automation(excel_bytes, pptx_bytes, from_row=2, to_row=9999, mapping_dic
         
     template_slide = prs.slides[0]
     
-    # Load sheet and parse images using the proven get_excel_images helper
-    col_to_images = {}
+    # Load images directly using the row-mapped logic
+    image_map = {}
     try:
-        col_to_images = get_excel_images(excel_bytes)
-    except:
-        pass
-
-    # Build exact row/col map and detect header row offset
-    exact_image_map = {}
-    header_row_idx = None
-    col_name_to_openpyxl_idx = {}
-    excel_cols = list(df.columns)
-    
-    try:
-        wb = openpyxl.load_workbook(io.BytesIO(excel_bytes))
-        ws = wb.active
-        
-        # Populate exact row/column coordinates
-        for img in ws._images:
-            try:
-                r = img.anchor._from.row
-                c = img.anchor._from.col
-                exact_image_map[(r, c)] = img._data()
-            except:
-                pass
-                
-        # Robustly map column names to openpyxl column indices and find header row
-        for r_h in range(1, 11):
-            for c_h in range(1, ws.max_column + 1):
-                cell_val = ws.cell(row=r_h, column=c_h).value
-                if cell_val:
-                    val_str = str(cell_val).strip()
-                    if val_str in excel_cols:
-                        col_name_to_openpyxl_idx[val_str] = c_h - 1
-                        if header_row_idx is None:
-                            header_row_idx = r_h - 1
-            if col_name_to_openpyxl_idx:
-                break
+        image_map = get_excel_images(excel_bytes)
     except:
         pass
 
@@ -851,25 +807,9 @@ def run_automation(excel_bytes, pptx_bytes, from_row=2, to_row=9999, mapping_dic
         for shape in slide.shapes:
             replace_text_in_shape(shape, placeholders)
             
-        # Replace images
+        # Replace images using row index mapping
         for img_tag, col_name in image_mappings.items():
-            img_bytes = None
-            
-            # Map column name to openpyxl column index
-            col_idx = col_name_to_openpyxl_idx.get(col_name)
-            if col_idx is None and col_name in excel_cols:
-                col_idx = excel_cols.index(col_name)
-                
-            if col_idx is not None:
-                # 1. Try exact row/column match
-                expected_row = actual_row_idx + (header_row_idx if header_row_idx is not None else 0) + 1
-                img_bytes = exact_image_map.get((expected_row, col_idx))
-                
-                # 2. Fallback to sequential match (exactly like previewer)
-                if not img_bytes and col_idx in col_to_images:
-                    imgs = col_to_images[col_idx]
-                    if actual_row_idx < len(imgs):
-                        img_bytes = imgs[actual_row_idx]
+            img_bytes = image_map.get(actual_row_idx + 2)
                         
             # Find matching shape
             ph_shape = None
@@ -890,8 +830,6 @@ def run_automation(excel_bytes, pptx_bytes, from_row=2, to_row=9999, mapping_dic
                 # Fallback to auto-detect by text
                 placeholder = find_image_placeholder(slide)
                 if placeholder:
-                    all_imgs = [b for imgs in col_to_images.values() for b in imgs]
-                    img_bytes = all_imgs[actual_row_idx] if actual_row_idx < len(all_imgs) else None
                     if img_bytes:
                         insert_image_into_placeholder(slide, img_bytes, placeholder)
                     else:
@@ -1493,11 +1431,7 @@ if current_page == "create":
                         row_idx = max(0, int(from_row) - 2)
                         if row_idx < len(df):
                             try:
-                                col_to_images = get_excel_images(st.session_state.excel_file_bytes)
-                                image_map = {}
-                                for col_idx, imgs in col_to_images.items():
-                                    for r_idx, img_bytes in enumerate(imgs):
-                                        image_map[(r_idx, col_idx)] = img_bytes
+                                image_map = get_excel_images(st.session_state.excel_file_bytes)
                             except:
                                 image_map = {}
 
