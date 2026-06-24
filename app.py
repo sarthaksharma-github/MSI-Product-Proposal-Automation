@@ -753,6 +753,140 @@ def load_excel_template(filename):
         return f.read()
 
 
+def run_automation(excel_bytes, pptx_bytes, from_row=2, to_row=9999, mapping_dict=None, image_mappings=None):
+    if mapping_dict is None:
+        mapping_dict = {}
+    if image_mappings is None:
+        image_mappings = {}
+
+    # Load Excel data
+    df = pd.read_excel(io.BytesIO(excel_bytes))
+    
+    # Subset rows based on from_row and to_row (Excel is 1-indexed, headers at row 1, data starts at row 2)
+    start_idx = max(0, from_row - 2)
+    end_idx = min(len(df), to_row - 1)
+    df_subset = df.iloc[start_idx:end_idx]
+    
+    if len(df_subset) == 0:
+        raise ValueError("No data rows found in the specified range.")
+
+    # Load PPTX presentation
+    prs = Presentation(io.BytesIO(pptx_bytes))
+    if not prs.slides:
+        raise ValueError("PowerPoint template contains no slides.")
+        
+    template_slide = prs.slides[0]
+    
+    # Pre-parse images using openpyxl for exact row/column coordinates
+    image_map = {}
+    col_to_images = {}
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(excel_bytes))
+        ws = wb.active
+        raw = []
+        for img in ws._images:
+            try:
+                r = img.anchor._from.row
+                c = img.anchor._from.col
+                data = img._data()
+                image_map[(r, c)] = data
+                raw.append((r, c, data))
+            except:
+                pass
+        raw.sort(key=lambda x: x[0])
+        for r, c, data in raw:
+            col_to_images.setdefault(c, []).append(data)
+    except:
+        pass
+
+    excel_cols = list(df.columns)
+
+    # Generate slides
+    for i, (_, excel_row) in enumerate(df_subset.iterrows()):
+        actual_row_idx = start_idx + i
+        slide = clone_slide(prs, template_slide)
+        
+        # Text placeholders
+        placeholders = {}
+        for tag, mapping in mapping_dict.items():
+            col = mapping.get("column", "")
+            fmt = mapping.get("format", "Text")
+            if not col or col not in excel_row:
+                placeholders[tag] = f"({tag} Unmapped)"
+                continue
+            
+            raw_val = excel_row[col]
+            if pd.isna(raw_val):
+                placeholders[tag] = ""
+                continue
+                
+            if fmt == "Currency":
+                symbol = mapping.get("symbol", "$")
+                placeholders[tag] = safe_format(raw_val, is_currency=True, currency_symbol=symbol)
+            elif fmt == "Percentage":
+                placeholders[tag] = safe_format(raw_val, is_percent=True)
+            elif fmt == "Integer":
+                placeholders[tag] = safe_format(raw_val)
+            else:
+                placeholders[tag] = safe_text(raw_val)
+
+        # Replace text
+        for shape in slide.shapes:
+            replace_text_in_shape(shape, placeholders)
+            
+        # Replace images
+        for img_tag, col_name in image_mappings.items():
+            img_bytes = None
+            if col_name in excel_cols:
+                col_idx = excel_cols.index(col_name)
+                # 1. Try exact row/column match
+                img_bytes = image_map.get((actual_row_idx + 1, col_idx))
+                # 2. Fallback to sequential match
+                if not img_bytes and col_idx in col_to_images:
+                    imgs = col_to_images[col_idx]
+                    if actual_row_idx < len(imgs):
+                        img_bytes = imgs[actual_row_idx]
+                        
+            # Find matching shape
+            ph_shape = None
+            for shape in slide.shapes:
+                if shape.has_text_frame and img_tag in shape.text_frame.text:
+                    ph_shape = shape
+                    break
+                    
+            if ph_shape:
+                if img_bytes:
+                    insert_image_into_placeholder(slide, img_bytes, ph_shape)
+                else:
+                    for para in ph_shape.text_frame.paragraphs:
+                        for run in para.runs:
+                            run.text = ""
+                    ph_shape.fill.background()
+            else:
+                # Fallback to auto-detect by text
+                placeholder = find_image_placeholder(slide)
+                if placeholder:
+                    all_imgs = [b for imgs in col_to_images.values() for b in imgs]
+                    img_bytes = all_imgs[actual_row_idx] if actual_row_idx < len(all_imgs) else None
+                    if img_bytes:
+                        insert_image_into_placeholder(slide, img_bytes, placeholder)
+                    else:
+                        for para in placeholder.text_frame.paragraphs:
+                            for run in para.runs:
+                                run.text = ""
+                        placeholder.fill.background()
+
+    # Delete template slide
+    try:
+        id_list = prs.slides._sldIdLst
+        del id_list[0]
+    except:
+        pass
+
+    output = io.BytesIO()
+    prs.save(output)
+    return output.getvalue(), len(df_subset)
+
 # ══════════════════════════════════════════════════════════════
 #  HISTORY DATABASE UTILITIES
 # ══════════════════════════════════════════════════════════════
