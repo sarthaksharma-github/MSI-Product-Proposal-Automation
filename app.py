@@ -777,29 +777,46 @@ def run_automation(excel_bytes, pptx_bytes, from_row=2, to_row=9999, mapping_dic
         
     template_slide = prs.slides[0]
     
-    # Pre-parse images using openpyxl for exact row/column coordinates
-    image_map = {}
+    # Load sheet and parse images using the proven get_excel_images helper
     col_to_images = {}
+    try:
+        col_to_images = get_excel_images(excel_bytes)
+    except:
+        pass
+
+    # Build exact row/col map and detect header row offset
+    exact_image_map = {}
+    header_row_idx = None
+    col_name_to_openpyxl_idx = {}
+    excel_cols = list(df.columns)
+    
     try:
         wb = openpyxl.load_workbook(io.BytesIO(excel_bytes))
         ws = wb.active
-        raw = []
+        
+        # Populate exact row/column coordinates
         for img in ws._images:
             try:
                 r = img.anchor._from.row
                 c = img.anchor._from.col
-                data = img._data()
-                image_map[(r, c)] = data
-                raw.append((r, c, data))
+                exact_image_map[(r, c)] = img._data()
             except:
                 pass
-        raw.sort(key=lambda x: x[0])
-        for r, c, data in raw:
-            col_to_images.setdefault(c, []).append(data)
+                
+        # Robustly map column names to openpyxl column indices and find header row
+        for r_h in range(1, 11):
+            for c_h in range(1, ws.max_column + 1):
+                cell_val = ws.cell(row=r_h, column=c_h).value
+                if cell_val:
+                    val_str = str(cell_val).strip()
+                    if val_str in excel_cols:
+                        col_name_to_openpyxl_idx[val_str] = c_h - 1
+                        if header_row_idx is None:
+                            header_row_idx = r_h - 1
+            if col_name_to_openpyxl_idx:
+                break
     except:
         pass
-
-    excel_cols = list(df.columns)
 
     # Generate slides
     for i, (_, excel_row) in enumerate(df_subset.iterrows()):
@@ -837,11 +854,18 @@ def run_automation(excel_bytes, pptx_bytes, from_row=2, to_row=9999, mapping_dic
         # Replace images
         for img_tag, col_name in image_mappings.items():
             img_bytes = None
-            if col_name in excel_cols:
+            
+            # Map column name to openpyxl column index
+            col_idx = col_name_to_openpyxl_idx.get(col_name)
+            if col_idx is None and col_name in excel_cols:
                 col_idx = excel_cols.index(col_name)
+                
+            if col_idx is not None:
                 # 1. Try exact row/column match
-                img_bytes = image_map.get((actual_row_idx + 1, col_idx))
-                # 2. Fallback to sequential match
+                expected_row = actual_row_idx + (header_row_idx if header_row_idx is not None else 0) + 1
+                img_bytes = exact_image_map.get((expected_row, col_idx))
+                
+                # 2. Fallback to sequential match (exactly like previewer)
                 if not img_bytes and col_idx in col_to_images:
                     imgs = col_to_images[col_idx]
                     if actual_row_idx < len(imgs):
