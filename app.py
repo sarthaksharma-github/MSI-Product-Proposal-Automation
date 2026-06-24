@@ -1,5 +1,5 @@
 # ============================================================
-#  MSI SERVICES — SLIDE AUTOMATION TOOL v3.3
+#  MSI SERVICES — SLIDE AUTOMATION TOOL v3.4
 #  Streamlit App
 # ============================================================
 
@@ -113,7 +113,7 @@ st.markdown("""
 <div class="msi-header">
   <div class="msi-logo">MSI</div>
   <div>
-    <p class="msi-header-title">Slide Automation Tool <span style="font-size:11px;opacity:0.7;font-weight:400;">v3.3</span></p>
+    <p class="msi-header-title">Slide Automation Tool <span style="font-size:11px;opacity:0.7;font-weight:400;">v3.4</span></p>
     <p class="msi-header-sub">Sales Support Operations &nbsp;·&nbsp; Making Dream Surfaces Attainable</p>
   </div>
 </div>
@@ -154,92 +154,126 @@ def get_excel_images(excel_bytes):
         col_to_images.setdefault(col, []).append(img_bytes)
     return col_to_images
 
-def detect_image_tags(detected_tags):
-    """Separate tags that look like image placeholders ([IMAGE], [IMAGE 1], [IMAGE_2], etc.) from text tags."""
-    image_pattern = re.compile(r'\[image.*\]', re.IGNORECASE)
-    img_tags = [t for t in detected_tags if image_pattern.match(t)]
-    text_tags = [t for t in detected_tags if not image_pattern.match(t)]
-    return text_tags, img_tags
+def parse_placeholder_tag(full_tag):
+    """Parse a PPTX placeholder tag that may carry an inline type annotation.
 
-def build_auto_mapping(text_tags, img_tags, excel_columns):
-    """Automatically maps placeholder tags to Excel columns.
-    - Number-aware: [FEAT_2] matches 'Feature 2' but NOT 'Feature 3'
-    - [IMAGE...] tags matched positionally to image-named columns
-    - retail/price/cost tags → Currency, everything else → Text
+    New format (recommended):
+        '[IMAGE 1 (Image)]'       → base='IMAGE 1',  type='Image',      symbol=None
+        '[NAME (Text)]'           → base='NAME',      type='Text',       symbol=None
+        '[RETAIL (Currency $)]'   → base='RETAIL',    type='Currency',   symbol='$'
+        '[LENGTH (Integer)]'      → base='LENGTH',    type='Integer',    symbol=None
+        '[IMU (Percentage)]'      → base='IMU',       type='Percentage', symbol=None
+
+    Legacy format (backward-compatible, no annotation):
+        '[NAME]'                  → base='NAME',      type=None,         symbol=None
+
+    Returns (base: str, col_type: str|None, symbol: str|None)
     """
-    def _normalize(s):
+    inner = full_tag.strip().lstrip('[').rstrip(']').strip()  # e.g. "RETAIL (Currency $)"
+    m = re.match(r'^(.+?)\s*\(([^)]+)\)\s*$', inner)
+    if m:
+        base = m.group(1).strip()
+        ann  = m.group(2).strip()
+        ann_l = ann.lower()
+        if any(x in ann_l for x in ['image', 'img', 'photo', 'picture']):
+            return base, 'Image', None
+        if 'currency' in ann_l or any(c in ann for c in '$€£¥₹'):
+            # Extract the currency symbol (any non-alpha, non-space char after stripping 'currency')
+            sym_m = re.search(r'[\.\$€£¥₹]', ann)
+            symbol = sym_m.group(0) if sym_m else '$'
+            return base, 'Currency', symbol
+        if any(x in ann_l for x in ['percent', '%']):
+            return base, 'Percentage', None
+        if any(x in ann_l for x in ['integer', 'int', 'number', 'num']):
+            return base, 'Integer', None
+        return base, 'Text', None
+    # No annotation — legacy tag like [NAME] or [RETAIL]
+    return inner, None, None
+
+
+def build_auto_mapping(all_pptx_tags, excel_columns):
+    """Universal auto-mapping: type is read from the PPTX tag annotation.
+
+    PPTX tag format (recommended):
+        [IMAGE 1 (Image)]        → image placeholder, matched to 'Image 1' column
+        [NAME (Text)]            → text field,        matched to 'Name' column
+        [RETAIL (Currency $)]    → currency ($),      matched to 'HD Retail' / 'Retail' column
+        [FEATURE 1 (Text)]       → text field,        matched to 'Feature 1' column
+
+    Legacy tags without annotation (backward-compatible):
+        [RETAIL]                 → falls back to tag-name heuristics (retail → Currency)
+
+    Excel column names stay PLAIN (no annotations needed).
+    Returns (mapping_dict, image_mappings) compatible with run_automation().
+    """
+    def _norm(s):
         s = re.sub(r'[\[\]_]', ' ', str(s))
         return re.sub(r'\s+', ' ', s).strip().lower()
 
-    def _extract_number(s):
+    def _num(s):
         m = re.search(r'(\d+)\s*$', s.strip())
         return int(m.group(1)) if m else None
 
-    def _best_col_match(tag_norm, columns):
-        tag_words_all = set(tag_norm.split())
-        tag_num = _extract_number(tag_norm)
-        # Root words = non-numeric words
-        tag_roots = {w for w in tag_words_all if not w.isdigit()}
-
+    def _best_excel_match(base_norm, cols):
+        """Find the best-matching plain Excel column for a normalised base name."""
+        tag_num   = _num(base_norm)
+        tag_roots = {w for w in base_norm.split() if not w.isdigit()}
         best_col, best_score = '', -999
-        for col in columns:
-            col_norm = _normalize(col)
-            col_words_all = set(col_norm.split())
-            col_num = _extract_number(col_norm)
-            col_roots = {w for w in col_words_all if not w.isdigit()}
-
-            # Require at least one root word to partially match (substring check)
-            root_hit = any(
-                tr in cr or cr in tr
-                for tr in tag_roots for cr in col_roots
-            )
-            if not root_hit:
-                continue  # no semantic overlap at all — skip
-
-            score = 1  # base: root words overlap
-
-            # Number handling — critical for FEAT_1 vs FEAT_2, IMAGE 1 vs IMAGE 2
+        for col in cols:
+            col_norm  = _norm(col)
+            col_num   = _num(col_norm)
+            col_roots = {w for w in col_norm.split() if not w.isdigit()}
+            if not any(tr in cr or cr in tr for tr in tag_roots for cr in col_roots):
+                continue
+            score = 1
             if tag_num is not None and col_num is not None:
-                if tag_num == col_num:
-                    score += 5   # strong match
-                else:
-                    score -= 10  # heavy penalty: wrong number is a strong signal to skip
-            elif tag_num is not None and col_num is None:
-                score -= 1   # tag has number, col doesn't — mild penalty
-
-            # Substring bonus
-            if tag_norm in col_norm or col_norm in tag_norm:
+                score += 5 if tag_num == col_num else -10
+            elif tag_num is not None:
+                score -= 1
+            if base_norm in col_norm or col_norm in base_norm:
                 score += 2
-
             if score > best_score:
-                best_score = score
-                best_col = col
-
+                best_score, best_col = score, col
         return best_col if best_score > 0 else ''
 
-    mapping_dict = {}
+    mapping_dict   = {}
     image_mappings = {}
 
-    for tag in text_tags:
-        tag_norm = _normalize(tag)
-        matched_col = _best_col_match(tag_norm, excel_columns)
-        tag_l = tag.lower()
-        if any(x in tag_l for x in ['retail', 'cost', 'price', 'rtl', 'amt', 'value']):
-            fmt = 'Currency'
-        elif any(x in tag_l for x in ['imu', 'percent', 'pct', '%']):
-            fmt = 'Percentage'
-        elif any(x in tag_l for x in ['units', 'qty', 'count']):
-            fmt = 'Integer'
-        else:
-            fmt = 'Text'
-        mapping_dict[tag] = {'column': matched_col, 'format': fmt}
+    for full_tag in all_pptx_tags:
+        base, col_type, symbol = parse_placeholder_tag(full_tag)
+        base_norm   = _norm(base)
+        matched_col = _best_excel_match(base_norm, excel_columns)
 
-    for img_tag in img_tags:
-        tag_norm = _normalize(img_tag)
-        matched_col = _best_col_match(tag_norm, excel_columns)
-        image_mappings[img_tag] = matched_col
+        if not matched_col:
+            continue
+
+        if col_type == 'Image':
+            image_mappings[full_tag] = matched_col
+
+        else:
+            # Determine format: annotation wins, then tag-name heuristic
+            if col_type in ('Currency', 'Percentage', 'Integer', 'Text'):
+                fmt = col_type
+            else:
+                tag_l = full_tag.lower()
+                if any(x in tag_l for x in ['retail', 'cost', 'price', 'rtl', 'amt', 'value']):
+                    fmt    = 'Currency'
+                    symbol = symbol or '$'
+                elif any(x in tag_l for x in ['imu', 'percent', 'pct', '%']):
+                    fmt = 'Percentage'
+                elif any(x in tag_l for x in ['units', 'qty', 'count']):
+                    fmt = 'Integer'
+                else:
+                    fmt = 'Text'
+
+            mapping_dict[full_tag] = {
+                'column': matched_col,
+                'format': fmt,
+                'symbol': symbol or '$',
+            }
 
     return mapping_dict, image_mappings
+
 
 def process_text_frame(tf, placeholders):
     for para in tf.paragraphs:
@@ -308,12 +342,12 @@ def insert_image_into_placeholder(slide, img_bytes, placeholder):
     output.seek(0)
     slide.shapes.add_picture(output, left, top, width, height)
 
-def safe_format(val, is_currency=False, is_percent=False):
+def safe_format(val, is_currency=False, currency_symbol='$', is_percent=False):
     try:
-        cleaned = str(val).replace('$', '').replace(',', '').replace('%', '').strip()
+        cleaned = re.sub(r'[^\d.\-]', '', str(val).strip())
         num = 0.0 if (not cleaned or cleaned.lower() == 'nan') else float(cleaned)
         if is_currency:
-            return f"${num:,.2f}" if num % 1 != 0 else f"${num:,.0f}"
+            return f"{currency_symbol}{num:,.2f}" if num % 1 != 0 else f"{currency_symbol}{num:,.0f}"
         if is_percent:
             return f"{num:.0%}"
         return f"{num:,.0f}"
@@ -547,15 +581,16 @@ def run_automation(excel_bytes, pptx_bytes, from_row, to_row, mapping_dict, imag
         # ── Text replacements ──
         replacements = {}
         for tag, cfg in mapping_dict.items():
-            col = cfg.get("column", "")
-            fmt = cfg.get("format", "Text")
+            col    = cfg.get("column", "")
+            fmt    = cfg.get("format", "Text")
+            symbol = cfg.get("symbol", "$")
             if not col:
                 continue
             val = row.get(col, "")
             if pd.isna(val):
                 val = ""
             if fmt == "Currency":
-                formatted_val = safe_format(val, is_currency=True)
+                formatted_val = safe_format(val, is_currency=True, currency_symbol=symbol)
             elif fmt == "Percentage":
                 formatted_val = safe_format(val, is_percent=True)
             elif fmt == "Integer":
@@ -748,8 +783,7 @@ if excel_file is not None:
         _detected_tags = extract_placeholders_from_pptx(_pptx_bytes_am)
         _df_am = pd.read_excel(io.BytesIO(_excel_bytes_am))
         _excel_columns_am = list(_df_am.columns)
-        _text_tags_am, _img_tags_am = detect_image_tags(_detected_tags)
-        mapping_dict, image_mappings = build_auto_mapping(_text_tags_am, _img_tags_am, _excel_columns_am)
+        mapping_dict, image_mappings = build_auto_mapping(_detected_tags, _excel_columns_am)
     except Exception as _e:
         st.warning(f"Auto-mapping could not be built: {_e}")
 
