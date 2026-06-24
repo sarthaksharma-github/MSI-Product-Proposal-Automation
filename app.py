@@ -1,5 +1,5 @@
 # ============================================================
-#  MSI SERVICES — SLIDE AUTOMATION TOOL v3.4
+#  MSI SERVICES — SLIDE AUTOMATION TOOL v3.5
 #  Streamlit App
 # ============================================================
 
@@ -19,107 +19,250 @@ import streamlit.components.v1 as components
 st.set_page_config(
     page_title="MSI Slide Automation Tool",
     page_icon="📊",
-    layout="wide"  # Use wide layout to better accommodate mapping UI & Live Preview side-by-side
+    layout="wide"
 )
 
 # ══════════════════════════════════════════════════════════════
-#  STYLING
+#  PREMIUM STYLING
 # ══════════════════════════════════════════════════════════════
 
 st.markdown("""
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
 
+  /* ── Global reset ── */
   html, body, [class*="css"] {
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    background-color: #FAF8F5 !important;
   }
+  .main .block-container { padding-top: 0 !important; max-width: 860px !important; }
+  #MainMenu, footer, header { visibility: hidden; }
+
+  /* ── MSI brand bar (kept as requested) ── */
   .msi-header {
-    background: #8B6F4E;
+    background: linear-gradient(135deg, #8B6F4E 0%, #6E5840 100%);
     padding: 22px 30px;
-    border-radius: 10px 10px 0 0;
-    display: flex;
-    align-items: center;
-    gap: 16px;
+    border-radius: 14px 14px 0 0;
+    display: flex; align-items: center; gap: 16px;
     margin-bottom: 0;
+    box-shadow: 0 4px 20px rgba(139,111,78,0.25);
   }
   .msi-logo {
-    font-size: 26px;
-    font-weight: 600;
-    color: #FFFFFF;
-    letter-spacing: 2px;
+    font-size: 26px; font-weight: 800; color: #fff;
+    letter-spacing: 3px; border: 2px solid rgba(255,255,255,0.4);
+    border-radius: 8px; padding: 4px 10px;
   }
-  .msi-header-title {
-    margin: 0;
-    font-size: 15px;
-    font-weight: 600;
-    color: #FFFFFF;
+  .msi-header-title { margin:0; font-size:15px; font-weight:700; color:#fff; }
+  .msi-header-sub   { margin:2px 0 0; font-size:11px; color:rgba(255,255,255,0.7); font-weight:400; }
+
+  /* ── Stepper bar ── */
+  .stepper-wrap {
+    background: #fff;
+    border: 1px solid #EDE8E1;
+    border-radius: 0 0 14px 14px;
+    padding: 20px 30px;
+    display: flex; align-items: center; justify-content: center; gap: 0;
+    box-shadow: 0 2px 12px rgba(139,111,78,0.07);
+    margin-bottom: 28px;
   }
-  .msi-header-sub {
-    margin: 2px 0 0;
-    font-size: 11px;
-    color: #E4D6CA;
-    font-weight: 300;
+  .step-item {
+    display: flex; flex-direction: column; align-items: center;
+    position: relative; flex: 1;
   }
-  .msi-footer {
-    background: #F9F6F3;
-    border: 1px solid #E4D6CA;
-    border-radius: 0 0 10px 10px;
-    padding: 10px 30px;
-    font-size: 10.5px;
-    color: #9A8070;
-    text-align: center;
-    margin-top: 0;
+  .step-item:not(:last-child)::after {
+    content: '';
+    position: absolute; top: 16px; left: 60%;
+    width: 80%; height: 2px;
+    background: #EDE8E1;
+    z-index: 0;
+    transition: background 0.4s ease;
   }
-  .msi-badge {
-    display: inline-block;
-    background: #FFF3E8;
-    border: 1px solid #E4D6CA;
-    border-radius: 20px;
-    padding: 2px 8px;
-    font-size: 10.5px;
-    color: #8B6F4E;
-    font-weight: 500;
-    margin-left: 6px;
+  .step-item.done:not(:last-child)::after  { background: #8B6F4E; }
+  .step-circle {
+    width: 34px; height: 34px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 700;
+    border: 2px solid #EDE8E1;
+    background: #FAF8F5; color: #B8A898;
+    z-index: 1; position: relative;
+    transition: all 0.35s cubic-bezier(.4,0,.2,1);
   }
-  .stButton > button, .stDownloadButton > button {
-    background-color: #8B6F4E !important;
-    color: white !important;
-    font-weight: 600 !important;
-    border: none !important;
-    border-radius: 8px !important;
-    padding: 10px 28px !important;
-    font-size: 14px !important;
-    width: 100%;
+  .step-item.active .step-circle {
+    border-color: #8B6F4E; background: #8B6F4E; color: #fff;
+    box-shadow: 0 0 0 5px rgba(139,111,78,0.15);
+    animation: pulse-ring 1.8s ease-out infinite;
   }
-  .stButton > button:hover, .stDownloadButton > button:hover {
-    background-color: #6E5840 !important;
+  .step-item.done .step-circle {
+    border-color: #8B6F4E; background: #8B6F4E; color: #fff;
   }
+  .step-label {
+    margin-top: 7px; font-size: 10.5px; font-weight: 600;
+    color: #B8A898; text-align: center; letter-spacing: 0.3px;
+    transition: color 0.3s;
+  }
+  .step-item.active .step-label, .step-item.done .step-label { color: #5C483A; }
+
+  @keyframes pulse-ring {
+    0%   { box-shadow: 0 0 0 0 rgba(139,111,78,0.35); }
+    70%  { box-shadow: 0 0 0 8px rgba(139,111,78,0); }
+    100% { box-shadow: 0 0 0 0 rgba(139,111,78,0); }
+  }
+
+  /* ── Step cards ── */
+  .step-card {
+    background: #fff;
+    border: 1px solid #EDE8E1;
+    border-radius: 14px;
+    padding: 26px 28px;
+    margin-bottom: 16px;
+    box-shadow: 0 2px 16px rgba(139,111,78,0.06);
+    animation: card-in 0.45s cubic-bezier(.4,0,.2,1) both;
+  }
+  .step-card-header {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 18px;
+  }
+  .step-card-num {
+    width: 30px; height: 30px; border-radius: 50%;
+    background: #8B6F4E; color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 700; flex-shrink: 0;
+  }
+  .step-card-title {
+    font-size: 15px; font-weight: 700; color: #2C1F14; margin: 0;
+  }
+  .step-card-desc {
+    font-size: 12px; color: #9A8070; margin: 2px 0 0;
+  }
+
+  @keyframes card-in {
+    from { opacity: 0; transform: translateY(18px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── File upload zone enhancement ── */
+  [data-testid="stFileUploader"] > div {
+    border: 2px dashed #CFC0B0 !important;
+    border-radius: 12px !important;
+    background: #FAF8F5 !important;
+    transition: border-color 0.3s, background 0.3s, box-shadow 0.3s !important;
+  }
+  [data-testid="stFileUploader"] > div:hover {
+    border-color: #8B6F4E !important;
+    background: #FFF8F2 !important;
+    box-shadow: 0 0 0 4px rgba(139,111,78,0.1) !important;
+  }
+
+  /* ── Selectbox & inputs ── */
   div[data-testid="stSelectbox"] label,
   div[data-testid="stFileUploader"] label,
   div[data-testid="stTextInput"] label,
-  div[data-testid="stNumberInput"] label {
-    font-weight: 600;
-    color: #2C1F14;
-    font-size: 13px;
+  div[data-testid="stNumberInput"] label,
+  div[data-testid="stRadio"] label:first-of-type {
+    font-weight: 600; color: #2C1F14; font-size: 13px;
   }
+  div[data-testid="stTextInput"] input,
+  div[data-testid="stNumberInput"] input {
+    border-radius: 8px !important;
+    border: 1.5px solid #E0D5CA !important;
+    transition: border-color 0.25s, box-shadow 0.25s !important;
+  }
+  div[data-testid="stTextInput"] input:focus,
+  div[data-testid="stNumberInput"] input:focus {
+    border-color: #8B6F4E !important;
+    box-shadow: 0 0 0 3px rgba(139,111,78,0.12) !important;
+  }
+
+  /* ── Buttons ── */
+  .stButton > button, .stDownloadButton > button {
+    background: linear-gradient(135deg, #8B6F4E 0%, #7A6042 100%) !important;
+    color: #fff !important;
+    font-weight: 700 !important;
+    font-size: 14px !important;
+    letter-spacing: 0.3px !important;
+    border: none !important;
+    border-radius: 10px !important;
+    padding: 12px 28px !important;
+    width: 100% !important;
+    box-shadow: 0 4px 14px rgba(139,111,78,0.3) !important;
+    transition: all 0.25s cubic-bezier(.4,0,.2,1) !important;
+  }
+  .stButton > button:hover, .stDownloadButton > button:hover {
+    background: linear-gradient(135deg, #7A6042 0%, #6A5235 100%) !important;
+    transform: translateY(-2px) !important;
+    box-shadow: 0 6px 20px rgba(139,111,78,0.4) !important;
+  }
+  .stButton > button:active, .stDownloadButton > button:active {
+    transform: translateY(0) !important;
+  }
+
+  /* ── Info / warning pills ── */
+  .info-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: #FFF8F2; border: 1px solid #E8D9CA;
+    border-radius: 20px; padding: 4px 12px;
+    font-size: 11.5px; color: #8B6F4E; font-weight: 600;
+  }
+
+  /* ── Success result card ── */
+  .result-card {
+    background: linear-gradient(135deg, #FFF8F2 0%, #FFF3E8 100%);
+    border: 1.5px solid #D4B896;
+    border-radius: 14px;
+    padding: 28px;
+    text-align: center;
+    animation: card-in 0.5s cubic-bezier(.4,0,.2,1) both;
+  }
+  .result-icon { font-size: 52px; line-height: 1; margin-bottom: 12px; animation: pop-in 0.4s 0.1s cubic-bezier(.17,.67,.35,1.5) both; }
+  .result-title { font-size: 20px; font-weight: 800; color: #2C1F14; margin: 0 0 4px; }
+  .result-sub { font-size: 13px; color: #8B6F4E; font-weight: 500; margin: 0 0 20px; }
+  .result-stats {
+    display: flex; justify-content: center; gap: 24px; margin-bottom: 24px; flex-wrap: wrap;
+  }
+  .stat-chip {
+    background: #fff; border: 1px solid #E8D9CA; border-radius: 10px;
+    padding: 10px 18px; text-align: center; min-width: 90px;
+  }
+  .stat-chip .val { font-size: 20px; font-weight: 800; color: #8B6F4E; display: block; }
+  .stat-chip .lbl { font-size: 10px; color: #9A8070; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+
+  @keyframes pop-in {
+    from { opacity: 0; transform: scale(0.5); }
+    to   { opacity: 1; transform: scale(1); }
+  }
+
+  /* ── Divider ── */
+  .fancy-divider { height: 1px; background: linear-gradient(90deg, transparent, #E0D5CA, transparent); margin: 4px 0 20px; }
+
+  /* ── Footer ── */
+  .msi-footer {
+    background: #fff; border: 1px solid #EDE8E1; border-radius: 14px;
+    padding: 14px 30px; font-size: 11px; color: #B8A898;
+    text-align: center; margin-top: 8px;
+    letter-spacing: 0.3px;
+  }
+
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: #FAF8F5; }
+  ::-webkit-scrollbar-thumb { background: #D4C4B4; border-radius: 4px; }
 </style>
 """, unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════
-#  HEADER
+#  HEADER (kept exactly as requested)
 # ══════════════════════════════════════════════════════════════
 
 st.markdown("""
 <div class="msi-header">
   <div class="msi-logo">MSI</div>
   <div>
-    <p class="msi-header-title">Slide Automation Tool <span style="font-size:11px;opacity:0.7;font-weight:400;">v3.4</span></p>
+    <p class="msi-header-title">Slide Automation Tool <span style="font-size:11px;opacity:0.6;font-weight:400;">v3.5</span></p>
     <p class="msi-header-sub">Sales Support Operations &nbsp;·&nbsp; Making Dream Surfaces Attainable</p>
   </div>
 </div>
 """, unsafe_allow_html=True)
 
-st.markdown("<br>", unsafe_allow_html=True)
+
 
 # ══════════════════════════════════════════════════════════════
 #  CORE ENGINE
@@ -649,45 +792,98 @@ def run_automation(excel_bytes, pptx_bytes, from_row, to_row, mapping_dict, imag
 
 
 # ══════════════════════════════════════════════════════════════
-#  TEMPLATE LOADER
+#  TEMPLATE & EXCEL LOADERS
 # ══════════════════════════════════════════════════════════════
 
-TEMPLATES_DIR = "templates"
+TEMPLATES_DIR       = "templates"
 EXCEL_TEMPLATES_DIR = "excel_templates"
 
 def get_available_templates():
-    """Returns list of .pptx filenames found in the templates/ folder."""
     if not os.path.exists(TEMPLATES_DIR):
         return []
     return [f for f in os.listdir(TEMPLATES_DIR) if f.endswith('.pptx')]
 
 def load_template(filename):
-    """Reads and returns bytes of a template from the templates/ folder."""
-    path = os.path.join(TEMPLATES_DIR, filename)
-    with open(path, 'rb') as f:
+    with open(os.path.join(TEMPLATES_DIR, filename), 'rb') as f:
         return f.read()
 
 def get_available_excel_templates():
-    """Returns list of .xlsx filenames found in the excel_templates/ folder."""
     if not os.path.exists(EXCEL_TEMPLATES_DIR):
         return []
     return [f for f in os.listdir(EXCEL_TEMPLATES_DIR) if f.endswith('.xlsx')]
 
 def load_excel_template(filename):
-    """Reads and returns bytes of an excel template from the excel_templates/ folder."""
-    path = os.path.join(EXCEL_TEMPLATES_DIR, filename)
-    with open(path, 'rb') as f:
+    with open(os.path.join(EXCEL_TEMPLATES_DIR, filename), 'rb') as f:
         return f.read()
 
 
 # ══════════════════════════════════════════════════════════════
-#  UI — STEP 1: TEMPLATE SELECTION
+#  WIZARD UI HELPERS
 # ══════════════════════════════════════════════════════════════
 
-st.markdown("#### Step 1 — Select Template")
-st.caption("Choose a pre-loaded template or upload your own custom `.pptx` file.")
+def render_stepper(active_step):
+    """Render the animated progress stepper. active_step is 1-based."""
+    steps = [
+        ("01", "Template"),
+        ("02", "Data"),
+        ("03", "Settings"),
+        ("04", "Generate"),
+    ]
+    items_html = ""
+    for idx, (num, label) in enumerate(steps, 1):
+        if idx < active_step:
+            cls = "step-item done"
+            icon = "✓"
+        elif idx == active_step:
+            cls = "step-item active"
+            icon = num
+        else:
+            cls = "step-item"
+            icon = num
+        items_html += f"""
+        <div class="{cls}">
+          <div class="step-circle">{icon}</div>
+          <div class="step-label">{label}</div>
+        </div>"""
+
+    st.markdown(f"""
+    <div class="stepper-wrap">{items_html}</div>
+    """, unsafe_allow_html=True)
+
+
+def step_card_open(num, title, desc=""):
+    desc_html = f'<div class="step-card-desc">{desc}</div>' if desc else ""
+    st.markdown(f"""
+    <div class="step-card">
+      <div class="step-card-header">
+        <div class="step-card-num">{num}</div>
+        <div>
+          <div class="step-card-title">{title}</div>
+          {desc_html}
+        </div>
+      </div>
+    """, unsafe_allow_html=True)
+
+def step_card_close():
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════
+#  STEP 1 — TEMPLATE SELECTION
+# ══════════════════════════════════════════════════════════════
 
 available_templates = get_available_templates()
+
+pptx_bytes_custom = None
+selected_template  = None
+
+# Determine wizard step number
+_active_step = 1
+
+render_stepper(_active_step)
+
+step_card_open("1", "Select Template",
+               "Choose a pre-loaded template or upload your own .pptx file")
 
 _template_source = st.radio(
     "Template Source",
@@ -696,15 +892,12 @@ _template_source = st.radio(
     key="template_source"
 )
 
-pptx_bytes_custom = None  # holds bytes of a custom-uploaded template
-selected_template = None
-
 if _template_source == "Pre-loaded Templates":
     if not available_templates:
-        st.warning("No templates found in the `templates/` folder. Please upload a custom template instead.")
+        st.warning("📂 No templates found in the `templates/` folder. Please upload a custom template instead.")
     else:
         selected_template = st.selectbox(
-            "Template",
+            "Select Template",
             options=available_templates,
             format_func=lambda x: x.replace('.pptx', '').replace('_', ' ')
         )
@@ -712,18 +905,23 @@ else:
     custom_pptx = st.file_uploader(
         "Upload PowerPoint Template (.pptx)",
         type=["pptx"],
-        help="Upload a single-slide .pptx file. Placeholders should use the [TAG] format.",
+        help="Upload a single-slide .pptx with [TAG (Type)] placeholders.",
         key="custom_pptx_upload"
     )
     if custom_pptx:
-        pptx_bytes_custom = custom_pptx.getvalue()
-        selected_template = custom_pptx.name
-        st.success(f"✔ Custom template loaded: **{custom_pptx.name}**")
+        pptx_bytes_custom  = custom_pptx.getvalue()
+        selected_template  = custom_pptx.name
+        st.success(f"✔️ **{custom_pptx.name}** loaded successfully")
     else:
-        st.info("Upload a `.pptx` file to continue.")
+        st.markdown("""
+        <div class="info-pill">
+          💡 Tip: Tags format — <code>[NAME (Text)]</code>, <code>[RETAIL (Currency $)]</code>, <code>[IMAGE 1 (Image)]</code>
+        </div>
+        """, unsafe_allow_html=True)
+
+step_card_close()
 
 def get_pptx_bytes():
-    """Returns the bytes of the currently selected template."""
     if pptx_bytes_custom is not None:
         return pptx_bytes_custom
     if selected_template:
@@ -733,131 +931,189 @@ def get_pptx_bytes():
 if selected_template is None and pptx_bytes_custom is None:
     st.stop()
 
-st.divider()
+# ══ Step 2 guard — advance stepper ══
+_active_step = 2
+
 
 # ══════════════════════════════════════════════════════════════
-#  UI — STEP 2: EXCEL UPLOAD
+#  STEP 2 — PRODUCT DATA UPLOAD
 # ══════════════════════════════════════════════════════════════
 
-st.markdown("#### Step 2 — Upload Product Data")
-st.caption("Upload your Excel file. Any filename is accepted.")
+render_stepper(_active_step)
+
+step_card_open("2", "Upload Product Data",
+               "Excel file with your product information and embedded images")
 
 excel_templates = get_available_excel_templates()
 if excel_templates:
-    st.markdown("<p style='font-size: 13px; font-weight: 600; color: #2C1F14; margin-bottom: 5px;'>Need an Excel template?</p>", unsafe_allow_html=True)
-    t_col1, t_col2 = st.columns([3, 1])
-    with t_col1:
+    st.markdown("<p style='font-size:12px;font-weight:700;color:#5C483A;margin-bottom:6px;'>⬇️ Download a starter Excel template</p>", unsafe_allow_html=True)
+    _tc1, _tc2 = st.columns([3, 1])
+    with _tc1:
         selected_excel = st.selectbox(
-            "Select Excel Template",
+            "Excel Template",
             options=excel_templates,
-            format_func=lambda x: x.replace('.xlsx', '').replace('_', ' '),
+            format_func=lambda x: x.replace('.xlsx','').replace('_',' '),
             label_visibility="collapsed"
         )
-    with t_col2:
+    with _tc2:
         if selected_excel:
             st.download_button(
-                label="📥 Download",
+                label="📥 Get Template",
                 data=load_excel_template(selected_excel),
                 file_name=selected_excel,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="dl_excel_template"
             )
-    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("<div class='fancy-divider'></div>", unsafe_allow_html=True)
 
 excel_file = st.file_uploader(
-    "Excel File (.xlsx)",
+    "Upload Excel File (.xlsx)",
     type=["xlsx"],
-    help="Product data with embedded images. Filename does not matter."
+    help="Product data with embedded images. Column names match your template tags."
 )
 
-st.divider()
+step_card_close()
 
-# Auto-mapping is built silently once the Excel file is uploaded
-mapping_dict = {}
-image_mappings = {}  # {img_tag: excel_col_name}
+if excel_file is None:
+    st.stop()
 
-if excel_file is not None:
-    try:
-        _excel_bytes_am = excel_file.getvalue()
-        _pptx_bytes_am = get_pptx_bytes()
-        _detected_tags = extract_placeholders_from_pptx(_pptx_bytes_am)
-        _df_am = pd.read_excel(io.BytesIO(_excel_bytes_am))
-        _excel_columns_am = list(_df_am.columns)
-        mapping_dict, image_mappings = build_auto_mapping(_detected_tags, _excel_columns_am)
-    except Exception as _e:
-        st.warning(f"Auto-mapping could not be built: {_e}")
+# ── Silent auto-mapping ──
+mapping_dict   = {}
+image_mappings = {}
+try:
+    _excel_bytes_am  = excel_file.getvalue()
+    _pptx_bytes_am   = get_pptx_bytes()
+    _detected_tags   = extract_placeholders_from_pptx(_pptx_bytes_am)
+    _df_am           = pd.read_excel(io.BytesIO(_excel_bytes_am))
+    _excel_columns_am = list(_df_am.columns)
+    mapping_dict, image_mappings = build_auto_mapping(_detected_tags, _excel_columns_am)
+except Exception as _e:
+    st.warning(f"Auto-mapping warning: {_e}")
 
-# ══════════════════════════════════════════════════════════════
-#  UI — STEP 3: OUTPUT FILENAME
-# ══════════════════════════════════════════════════════════════
+_active_step = 3
 
-st.markdown("#### Step 3 — Output Filename")
-st.caption("Name your output file. `.pptx` is added automatically.")
-
-output_name = st.text_input(
-    "Output Filename (Optional)",
-    value="",
-    placeholder="e.g. May_Fountain_Submissions"
-)
-
-st.divider()
 
 # ══════════════════════════════════════════════════════════════
-#  UI — STEP 4: ROW RANGE
+#  STEP 3 — OUTPUT SETTINGS
 # ══════════════════════════════════════════════════════════════
 
-st.markdown("#### Step 4 — Row Range *(optional)*")
-st.caption("Leave defaults to process all rows. Adjust for a partial batch.")
+render_stepper(_active_step)
 
-col1, col2 = st.columns(2)
-with col1:
-    from_row = st.number_input("From Row", min_value=1, max_value=9999, value=2)
-with col2:
-    to_row = st.number_input("To Row", min_value=1, max_value=9999, value=9999)
+step_card_open("3", "Output Settings",
+               "Name your file and choose which rows to include")
 
-st.divider()
+_s3c1, _s3c2 = st.columns([2, 1])
+with _s3c1:
+    output_name = st.text_input(
+        "Output Filename",
+        value="",
+        placeholder="e.g. May_Fountain_Submissions",
+        help=".pptx extension is added automatically"
+    )
+with _s3c2:
+    st.markdown("&nbsp;", unsafe_allow_html=True)  # spacer
+
+_row_c1, _row_c2 = st.columns(2)
+with _row_c1:
+    from_row = st.number_input(
+        "From Row",
+        min_value=1, max_value=9999, value=2,
+        help="First data row to process (row 2 = first product)"
+    )
+with _row_c2:
+    to_row = st.number_input(
+        "To Row",
+        min_value=1, max_value=9999, value=9999,
+        help="Last data row to process (9999 = all rows)"
+    )
+
+step_card_close()
+
+_active_step = 4
+
 
 # ══════════════════════════════════════════════════════════════
-#  UI — STEP 5: GENERATE
+#  STEP 4 — GENERATE
 # ══════════════════════════════════════════════════════════════
 
-st.markdown("#### Step 5 — Generate Slides")
+render_stepper(_active_step)
 
-if st.button("🚀  Generate Slides"):
-    if excel_file is None:
-        st.error("⚠️ Please upload your Excel file before generating.")
-    else:
-        default_fname = f"{(selected_template or 'Output').replace('.pptx', '')}_Output"
-        fname = output_name.strip() or default_fname
-        if not fname.endswith('.pptx'):
-            fname += '.pptx'
+step_card_open("4", "Generate Slides",
+               "Everything is ready — hit the button to build your presentation")
 
-        with st.spinner("Building your slides... please wait."):
-            try:
-                excel_bytes = excel_file.getvalue()
-                pptx_bytes = get_pptx_bytes()
+# Summary pills before generate button
+_tmpl_label = (selected_template or "").replace('.pptx','').replace('_',' ')
+_row_label   = f"Rows {from_row}–{to_row}" if to_row < 9999 else "All rows"
+st.markdown(f"""
+<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;">
+  <span class="info-pill">📄 {_tmpl_label or 'Custom Template'}</span>
+  <span class="info-pill">📊 {excel_file.name}</span>
+  <span class="info-pill">🗻️ {_row_label}</span>
+  <span class="info-pill">🔗 {len(mapping_dict)} field{'s' if len(mapping_dict)!=1 else ''} mapped</span>
+</div>
+""", unsafe_allow_html=True)
 
-                result_bytes, count = run_automation(
-                    excel_bytes, pptx_bytes,
-                    from_row=int(from_row),
-                    to_row=int(to_row),
-                    mapping_dict=mapping_dict,
-                    image_mappings=image_mappings
-                )
+if st.button("🚀  Generate Presentation", key="gen_btn"):
+    default_fname = f"{(_tmpl_label or 'Output').replace(' ','_')}_Output"
+    fname = output_name.strip() or default_fname
+    if not fname.endswith('.pptx'):
+        fname += '.pptx'
 
-                st.success(f"✔️ Done! {count} slide{'s' if count > 1 else ''} generated.")
+    import time as _time
+    _t0 = _time.time()
 
-                st.download_button(
-                    label=f"📥  Download {fname}",
-                    data=result_bytes,
-                    file_name=fname,
-                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                )
+    with st.spinner("✨ Building your slides..."):
+        try:
+            excel_bytes = excel_file.getvalue()
+            pptx_bytes  = get_pptx_bytes()
 
-            except ValueError as e:
-                st.error(f"⚠️ {str(e)}")
-            except Exception as e:
-                st.error(f"Something went wrong: `{str(e)}` \n\nCheck your file formats and column names, then try again.")
+            result_bytes, count = run_automation(
+                excel_bytes, pptx_bytes,
+                from_row=int(from_row),
+                to_row=int(to_row),
+                mapping_dict=mapping_dict,
+                image_mappings=image_mappings
+            )
+            _elapsed = round(_time.time() - _t0, 1)
+
+            # ── Premium success card ──
+            st.markdown(f"""
+            <div class="result-card">
+              <div class="result-icon">🎉</div>
+              <div class="result-title">Presentation Ready!</div>
+              <div class="result-sub">{fname}</div>
+              <div class="result-stats">
+                <div class="stat-chip">
+                  <span class="val">{count}</span>
+                  <span class="lbl">Slide{'s' if count!=1 else ''}</span>
+                </div>
+                <div class="stat-chip">
+                  <span class="val">{len(mapping_dict)}</span>
+                  <span class="lbl">Fields</span>
+                </div>
+                <div class="stat-chip">
+                  <span class="val">{_elapsed}s</span>
+                  <span class="lbl">Time</span>
+                </div>
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            st.download_button(
+                label=f"📥  Download {fname}",
+                data=result_bytes,
+                file_name=fname,
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                key="download_result"
+            )
+
+        except ValueError as e:
+            st.error(f"⚠️ {str(e)}")
+        except Exception as e:
+            st.error(f"Something went wrong: `{str(e)}`  \nCheck your file formats and column names, then try again.")
+
+step_card_close()
 
 # ══════════════════════════════════════════════════════════════
 #  FOOTER
