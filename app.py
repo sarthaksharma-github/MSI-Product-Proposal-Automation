@@ -21,18 +21,18 @@ dst_logo = os.path.join(project_dir, "msi_logo.png")
 
 # Try to find logo in brain folder or current dir
 logo_copied = False
-if not os.path.exists(dst_logo):
-    brain_dir = r"C:\Users\sarthak.s\.gemini\antigravity\brain\c86fcd1e-6a81-44ad-9eeb-5fce89a06592"
-    possible_logos = ["media__1782309457101.png", "media__1782309064522.png"]
-    for l_name in possible_logos:
-        src_path = os.path.join(brain_dir, l_name)
-        if os.path.exists(src_path):
-            try:
-                shutil.copy(src_path, dst_logo)
-                logo_copied = True
-                break
-            except:
-                pass
+brain_dir = r"C:\Users\sarthak.s\.gemini\antigravity\brain\c86fcd1e-6a81-44ad-9eeb-5fce89a06592"
+# Prefer the newly uploaded high quality logo (media__1782310810983.png)
+possible_logos = ["media__1782310810983.png", "media__1782309457101.png", "media__1782309064522.png"]
+for l_name in possible_logos:
+    src_path = os.path.join(brain_dir, l_name)
+    if os.path.exists(src_path):
+        try:
+            shutil.copy(src_path, dst_logo)
+            logo_copied = True
+            break
+        except:
+            pass
 
 # ══════════════════════════════════════════════════════════════
 #  PAGE CONFIG
@@ -59,9 +59,36 @@ st.markdown("""
     background-color: #FAF8F5 !important;
   }
   
-  /* Apply font family to all child elements safely without forcing background-colors */
-  [data-testid="stAppViewContainer"] * {
+  /* Apply font family to text elements safely, excluding material icons and elements with icon fonts */
+  [data-testid="stAppViewContainer"] span:not([data-testid="stIcon"]):not([class*="Icon"]):not([class*="icon"]):not([class*="material-"]):not([style*="Icon"]),
+  [data-testid="stAppViewContainer"] p,
+  [data-testid="stAppViewContainer"] div:not([data-testid="stIcon"]):not([class*="Icon"]):not([class*="icon"]),
+  [data-testid="stAppViewContainer"] label,
+  [data-testid="stAppViewContainer"] h1,
+  [data-testid="stAppViewContainer"] h2,
+  [data-testid="stAppViewContainer"] h3,
+  [data-testid="stAppViewContainer"] h4,
+  [data-testid="stAppViewContainer"] h5,
+  [data-testid="stAppViewContainer"] h6,
+  [data-testid="stAppViewContainer"] input,
+  [data-testid="stAppViewContainer"] select,
+  [data-testid="stAppViewContainer"] button {
     font-family: 'Plus Jakarta Sans', sans-serif !important;
+  }
+
+  /* Restore Streamlit's default icon fonts globally to prevent text overlapping or rendering names like expand_more, upload */
+  span[class*="Icon"], 
+  span[class*="icon"], 
+  span[class*="material-"], 
+  span[data-testid="stIcon"],
+  span[style*="Icon"],
+  i[class*="Icon"], 
+  i[class*="icon"], 
+  i[class*="material-"], 
+  i[data-testid="stIcon"],
+  i[style*="Icon"],
+  [data-testid="stIcon"] {
+    font-family: "Material Symbols Rounded", "Material Symbols Outlined", "Material Symbols Sharp", "Material Icons", sans-serif !important;
   }
   
   .main .block-container { 
@@ -938,16 +965,8 @@ with col_title:
 with col_help:
     help_popover = st.popover("❓ Help Support", use_container_width=True)
     with help_popover:
-        st.markdown("""
-        <div style="font-family:'Plus Jakarta Sans',sans-serif;padding:4px;">
-            <h4 style="margin:0 0 10px;color:#8B6F4E;font-size:13px;border-bottom:1px solid #EDE8E1;padding-bottom:6px;">Support Contact</h4>
-            <p style="margin:4px 0;font-size:11.5px;color:#2C1F14;"><b>Name:</b> Sarthak Sharma</p>
-            <p style="margin:4px 0;font-size:11.5px;color:#2C1F14;"><b>Email:</b> <a href="mailto:sarthak.s@msisurfaces.com" style="color:#8B6F4E;text-decoration:none;">sarthak.s@msisurfaces.com</a></p>
-            <p style="margin:4px 0;font-size:11.5px;color:#2C1F14;"><b>Ext:</b> 5023</p>
-            <hr style="border:none;border-top:1px solid #EDE8E1;margin:8px 0;"/>
-            <a href="https://teams.microsoft.com/l/chat/0/0?users=sarthak.s@msisurfaces.com" target="_blank" style="display:block;text-align:center;background:#8B6F4E;color:#fff;padding:8px 12px;border-radius:6px;font-size:11px;font-weight:700;text-decoration:none;transition:background 0.2s;">💬 Chat on Teams</a>
-        </div>
-        """, unsafe_allow_html=True)
+        help_html = '<div style="font-family:\'Plus Jakarta Sans\',sans-serif;padding:4px;"><h4 style="margin:0 0 10px;color:#8B6F4E;font-size:13px;border-bottom:1px solid #EDE8E1;padding-bottom:6px;">Support Contact</h4><p style="margin:4px 0;font-size:11.5px;color:#2C1F14;"><b>Name:</b> Sarthak Sharma</p><p style="margin:4px 0;font-size:11.5px;color:#2C1F14;"><b>Email:</b> <a href="mailto:sarthak.s@msisurfaces.com" style="color:#8B6F4E;text-decoration:none;">sarthak.s@msisurfaces.com</a></p><p style="margin:4px 0;font-size:11.5px;color:#2C1F14;"><b>Ext:</b> 5023</p><hr style="border:none;border-top:1px solid #EDE8E1;margin:8px 0;"/><a href="https://teams.microsoft.com/l/chat/0/0?users=sarthak.s@msisurfaces.com" target="_blank" style="display:block;text-align:center;background:#8B6F4E;color:#fff;padding:8px 12px;border-radius:6px;font-size:11px;font-weight:700;text-decoration:none;transition:background 0.2s;">💬 Chat on Teams</a></div>'
+        st.markdown(help_html, unsafe_allow_html=True)
 
 st.markdown("<div class='fancy-divider'></div>", unsafe_allow_html=True)
 
@@ -1414,40 +1433,10 @@ elif current_page == "history":
             for idx, entry in enumerate(history_list):
                 status_color = "#385723" if entry.get('status') == "Success" else "#C00000"
                 status_bg = "#E2F0D9" if entry.get('status') == "Success" else "#FCE4D6"
-                table_rows += f"""
-                <tr style="border-bottom:1px solid #EDE8E1;">
-                    <td style="padding:12px;font-size:12px;color:#2C1F14;font-weight:600;">{entry.get('timestamp')}</td>
-                    <td style="padding:12px;font-size:12px;color:#8B6F4E;font-weight:700;">{entry.get('filename')}</td>
-                    <td style="padding:12px;font-size:12px;color:#5C483A;">{entry.get('template')}</td>
-                    <td style="padding:12px;font-size:12px;color:#5C483A;">{entry.get('excel')}</td>
-                    <td style="padding:12px;font-size:12px;color:#2C1F14;font-weight:600;text-align:center;">{entry.get('rows')}</td>
-                    <td style="padding:12px;font-size:11px;text-align:center;">
-                        <span style="background:{status_bg};color:{status_color};padding:2px 8px;border-radius:20px;font-weight:600;">{entry.get('status', 'Success')}</span>
-                    </td>
-                </tr>
-                """
+                table_rows += f'<tr style="border-bottom:1px solid #EDE8E1;"><td style="padding:12px;font-size:12px;color:#2C1F14;font-weight:600;">{entry.get("timestamp")}</td><td style="padding:12px;font-size:12px;color:#8B6F4E;font-weight:700;">{entry.get("filename")}</td><td style="padding:12px;font-size:12px;color:#5C483A;">{entry.get("template")}</td><td style="padding:12px;font-size:12px;color:#5C483A;">{entry.get("excel")}</td><td style="padding:12px;font-size:12px;color:#2C1F14;font-weight:600;text-align:center;">{entry.get("rows")}</td><td style="padding:12px;font-size:11px;text-align:center;"><span style="background:{status_bg};color:{status_color};padding:2px 8px;border-radius:20px;font-weight:600;">{entry.get("status", "Success")}</span></td></tr>'
             
-            st.markdown(f"""
-            <div style="overflow-x:auto;">
-                <table style="width:100%;border-collapse:collapse;text-align:left;">
-                    <thead>
-                        <tr style="background:#FAF8F5;border-bottom:2px solid #EDE8E1;">
-                            <th style="padding:12px;font-size:11px;font-weight:700;color:#9A8070;text-transform:uppercase;">Date & Time</th>
-                            <th style="padding:12px;font-size:11px;font-weight:700;color:#9A8070;text-transform:uppercase;">Output Name</th>
-                            <th style="padding:12px;font-size:11px;font-weight:700;color:#9A8070;text-transform:uppercase;">Template</th>
-                            <th style="padding:12px;font-size:11px;font-weight:700;color:#9A8070;text-transform:uppercase;">Excel File</th>
-                            <th style="padding:12px;font-size:11px;font-weight:700;color:#9A8070;text-transform:uppercase;text-align:center;">Rows</th>
-                            <th style="padding:12px;font-size:11px;font-weight:700;color:#9A8070;text-transform:uppercase;text-align:center;">Status</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {table_rows}
-                    </tbody>
-                </table>
-            </div>
-            """, unsafe_allow_html=True)
-
-
+            history_table_html = f'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;text-align:left;"><thead><tr style="background:#FAF8F5;border-bottom:2px solid #EDE8E1;"><th style="padding:12px;font-size:11px;font-weight:700;color:#9A8070;text-transform:uppercase;">Date & Time</th><th style="padding:12px;font-size:11px;font-weight:700;color:#9A8070;text-transform:uppercase;">Output Name</th><th style="padding:12px;font-size:11px;font-weight:700;color:#9A8070;text-transform:uppercase;">Template</th><th style="padding:12px;font-size:11px;font-weight:700;color:#9A8070;text-transform:uppercase;">Excel File</th><th style="padding:12px;font-size:11px;font-weight:700;color:#9A8070;text-transform:uppercase;text-align:center;">Rows</th><th style="padding:12px;font-size:11px;font-weight:700;color:#9A8070;text-transform:uppercase;text-align:center;">Status</th></tr></thead><tbody>{table_rows}</tbody></table></div>'
+            st.markdown(history_table_html, unsafe_allow_html=True)
 elif current_page == "gallery":
     if not os.path.exists(TEMPLATES_DIR):
         try:
