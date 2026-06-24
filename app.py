@@ -12,6 +12,16 @@ from PIL import Image as PILImage
 import io, copy, os, traceback, re, json, base64
 import streamlit.components.v1 as components
 
+# Keep app.py and app_new.txt in sync automatically
+try:
+    src_file = __file__
+    if src_file.endswith("app_new.txt"):
+        dst_file = os.path.join(os.path.dirname(src_file), "app.py")
+        import shutil
+        shutil.copy(src_file, dst_file)
+except Exception as e:
+    pass
+
 # ══════════════════════════════════════════════════════════════
 #  MSI LOGO AUTO-COPY ROUTINE
 # ══════════════════════════════════════════════════════════════
@@ -479,25 +489,68 @@ def parse_placeholder_tag(full_tag):
     return inner, None, None
 
 def build_auto_mapping(all_pptx_tags, excel_columns):
-    mapping_dict = {}
+    def _norm(s):
+        s = re.sub(r'[\[\]_]', ' ', str(s))
+        return re.sub(r'\s+', ' ', s).strip().lower()
+
+    def _num(s):
+        m = re.search(r'(\d+)\s*$', s.strip())
+        return int(m.group(1)) if m else None
+
+    def _best_excel_match(base_norm, cols):
+        tag_num   = _num(base_norm)
+        tag_roots = {w for w in base_norm.split() if not w.isdigit()}
+        best_col, best_score = '', -999
+        for col in cols:
+            col_norm  = _norm(col)
+            col_num   = _num(col_norm)
+            col_roots = {w for w in col_norm.split() if not w.isdigit()}
+            if not any(tr in cr or cr in tr for tr in tag_roots for cr in col_roots):
+                continue
+            score = 1
+            if tag_num is not None and col_num is not None:
+                score += 5 if tag_num == col_num else -10
+            elif tag_num is not None:
+                score -= 1
+            if base_norm in col_norm or col_norm in base_norm:
+                score += 2
+            if score > best_score:
+                best_score, best_col = score, col
+        return best_col if best_score > 0 else ''
+
+    mapping_dict   = {}
     image_mappings = {}
-    
-    col_map = {col.strip().upper(): col for col in excel_columns}
-    
+
     for full_tag in all_pptx_tags:
         base, col_type, symbol = parse_placeholder_tag(full_tag)
-        base_upper = base.strip().upper()
-        
-        matched_col = col_map.get(base_upper, "")
-        if matched_col:
-            if col_type == 'Image':
-                image_mappings[full_tag] = matched_col
+        base_norm   = _norm(base)
+        matched_col = _best_excel_match(base_norm, excel_columns)
+
+        if not matched_col:
+            continue
+
+        if col_type == 'Image':
+            image_mappings[full_tag] = matched_col
+        else:
+            if col_type in ('Currency', 'Percentage', 'Integer', 'Text'):
+                fmt = col_type
             else:
-                mapping_dict[full_tag] = {
-                    'column': matched_col,
-                    'format': col_type or 'Text',
-                    'symbol': symbol or '$'
-                }
+                tag_l = full_tag.lower()
+                if any(x in tag_l for x in ['retail', 'cost', 'price', 'rtl', 'amt', 'value']):
+                    fmt    = 'Currency'
+                    symbol = symbol or '$'
+                elif any(x in tag_l for x in ['imu', 'percent', 'pct', '%']):
+                    fmt = 'Percentage'
+                elif any(x in tag_l for x in ['units', 'qty', 'count']):
+                    fmt = 'Integer'
+                else:
+                    fmt = 'Text'
+
+            mapping_dict[full_tag] = {
+                'column': matched_col,
+                'format': fmt,
+                'symbol': symbol or '$'
+            }
     return mapping_dict, image_mappings
 
 def safe_format(val, is_currency=False, currency_symbol='$', is_percent=False):
@@ -1257,7 +1310,21 @@ if current_page == "create":
                         mapping_dict, image_mappings = build_auto_mapping(_detected_tags, list(_df_am.columns))
                     except:
                         pass
-                        
+
+                if excel_bytes and pptx_bytes and len(mapping_dict) == 0:
+                    with st.expander("🔍 Debug Placeholder Mapping Mismatch", expanded=True):
+                        st.markdown("""
+                        <div style='background:#FDF2F2; border:1px solid #F8B4B4; border-radius:8px; padding:12px; color:#9B1C1C; font-size:12px; line-height:1.4;'>
+                            ⚠️ <b>No matching columns found between your PowerPoint template and Excel sheet!</b>
+                            <br/>Ensure your placeholder names match the Excel column headers (e.g., <code>[ITEM_NUM]</code> maps to <code>Item Num</code> or <code>item_num</code>).
+                        </div>
+                        """, unsafe_allow_html=True)
+                        try:
+                            st.write("**Detected Template Placeholders:**", _detected_tags)
+                            st.write("**Excel Column Headers:**", list(_df_am.columns))
+                        except:
+                            pass
+
                 generate_clicked = st.button("🚀 Start Conversion", key="btn_generate")
 
                 if generate_clicked:
