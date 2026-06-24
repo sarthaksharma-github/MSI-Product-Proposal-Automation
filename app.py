@@ -52,31 +52,25 @@ st.set_page_config(
 st.markdown("""
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200');
 
-  /* Global resets and body styling */
+  /* Global resets and body styling - no !important on font-family to allow icons to load their fonts */
   html, body, [data-testid="stAppViewContainer"] {
-    font-family: 'Plus Jakarta Sans', sans-serif !important;
+    font-family: 'Plus Jakarta Sans', sans-serif;
     background-color: #FAF8F5 !important;
   }
   
-  /* Apply font family to text elements safely, excluding material icons and elements with icon fonts */
-  [data-testid="stAppViewContainer"] span:not([data-testid="stIcon"]):not([class*="Icon"]):not([class*="icon"]):not([class*="material-"]):not([style*="Icon"]),
-  [data-testid="stAppViewContainer"] p,
-  [data-testid="stAppViewContainer"] div:not([data-testid="stIcon"]):not([class*="Icon"]):not([class*="icon"]),
-  [data-testid="stAppViewContainer"] label,
-  [data-testid="stAppViewContainer"] h1,
-  [data-testid="stAppViewContainer"] h2,
-  [data-testid="stAppViewContainer"] h3,
-  [data-testid="stAppViewContainer"] h4,
-  [data-testid="stAppViewContainer"] h5,
-  [data-testid="stAppViewContainer"] h6,
-  [data-testid="stAppViewContainer"] input,
-  [data-testid="stAppViewContainer"] select,
-  [data-testid="stAppViewContainer"] button {
+  /* Apply font family specifically to standard text elements without overriding icon glyphs */
+  p, label, h1, h2, h3, h4, h5, h6, input, select {
     font-family: 'Plus Jakarta Sans', sans-serif !important;
   }
+  
+  /* Apply font family to buttons and dropdowns without !important so child icons can override it */
+  button, select, option, input[type="button"], input[type="submit"] {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+  }
 
-  /* Restore Streamlit's default icon fonts globally to prevent text overlapping or rendering names like expand_more, upload */
+  /* Restore Streamlit's default icon fonts globally as an extra safeguard and enforce ligature rendering */
   span[class*="Icon"], 
   span[class*="icon"], 
   span[class*="material-"], 
@@ -87,8 +81,23 @@ st.markdown("""
   i[class*="material-"], 
   i[data-testid="stIcon"],
   i[style*="Icon"],
-  [data-testid="stIcon"] {
+  [data-testid="stIcon"],
+  [data-testid="stSidebarCollapseButton"] button *,
+  [data-testid="collapsedSidebarTab"] button *,
+  [data-testid="stHeader"] button *,
+  [data-testid="stSidebarCollapseButton"] *,
+  [data-testid="collapsedSidebarTab"] * {
     font-family: "Material Symbols Rounded", "Material Symbols Outlined", "Material Symbols Sharp", "Material Icons", sans-serif !important;
+    font-feature-settings: 'liga' 1 !important;
+    -webkit-font-feature-settings: 'liga' 1 !important;
+    -moz-font-feature-settings: 'liga' 1 !important;
+    font-variant-ligatures: common-ligatures !important;
+    font-style: normal !important;
+    text-transform: none !important;
+    line-height: 1 !important;
+    white-space: nowrap !important;
+    direction: ltr !important;
+    -webkit-font-smoothing: antialiased !important;
   }
   
   .main .block-container { 
