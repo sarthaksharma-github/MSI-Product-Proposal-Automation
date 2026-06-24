@@ -434,12 +434,78 @@ def insert_image_into_placeholder(slide, img_bytes, placeholder):
     output.seek(0)
     slide.shapes.add_picture(output, left, top, width, height)
 
-def safe_format(val, is_currency=False, is_percent=False):
+def extract_placeholders_from_pptx(pptx_bytes):
+    placeholders = set()
+    pattern = re.compile(r'\[([^\]]+)\]')
+    try:
+        prs = Presentation(io.BytesIO(pptx_bytes))
+        for slide in prs.slides:
+            for shape in slide.shapes:
+                if shape.has_text_frame:
+                    for para in shape.text_frame.paragraphs:
+                        for match in pattern.findall(para.text):
+                            placeholders.add(f"[{match.strip()}]")
+                elif shape.has_table:
+                    for row in shape.table.rows:
+                        for cell in row.cells:
+                            for para in cell.text_frame.paragraphs:
+                                for match in pattern.findall(para.text):
+                                    placeholders.add(f"[{match.strip()}]")
+    except:
+        pass
+    return sorted(list(placeholders))
+
+def parse_placeholder_tag(full_tag):
+    inner = full_tag.strip().lstrip('[').rstrip(']').strip()
+    m = re.match(r'^(.+?)\s*\(([^)]+)\)\s*$', inner)
+    if m:
+        base = m.group(1).strip()
+        ann  = m.group(2).strip()
+        ann_l = ann.lower()
+        if any(x in ann_l for x in ['image', 'img', 'photo', 'picture']):
+            return base, 'Image', None
+        if 'currency' in ann_l:
+            symbol = '$'
+            for char in ann:
+                if char in '$€£¥₹':
+                    symbol = char
+                    break
+            return base, 'Currency', symbol
+        if any(x in ann_l for x in ['percent', '%']):
+            return base, 'Percentage', None
+        if any(x in ann_l for x in ['integer', 'int', 'number', 'num']):
+            return base, 'Integer', None
+        return base, 'Text', None
+    return inner, None, None
+
+def build_auto_mapping(all_pptx_tags, excel_columns):
+    mapping_dict = {}
+    image_mappings = {}
+    
+    col_map = {col.strip().upper(): col for col in excel_columns}
+    
+    for full_tag in all_pptx_tags:
+        base, col_type, symbol = parse_placeholder_tag(full_tag)
+        base_upper = base.strip().upper()
+        
+        matched_col = col_map.get(base_upper, "")
+        if matched_col:
+            if col_type == 'Image':
+                image_mappings[full_tag] = matched_col
+            else:
+                mapping_dict[full_tag] = {
+                    'column': matched_col,
+                    'format': col_type or 'Text',
+                    'symbol': symbol or '$'
+                }
+    return mapping_dict, image_mappings
+
+def safe_format(val, is_currency=False, currency_symbol='$', is_percent=False):
     try:
         cleaned = str(val).replace('$', '').replace(',', '').replace('%', '').strip()
         num = 0.0 if (not cleaned or cleaned.lower() == 'nan') else float(cleaned)
         if is_currency:
-            return f"${num:,.2f}" if num % 1 != 0 else f"${num:,.0f}"
+            return f"{currency_symbol}{num:,.2f}" if num % 1 != 0 else f"{currency_symbol}{num:,.0f}"
         if is_percent:
             return f"{num:.0%}"
         return f"{num:,.0f}"
@@ -460,6 +526,10 @@ def run_automation(excel_bytes, pptx_bytes, from_row, to_row):
     if df_subset.empty:
         raise ValueError("Selected row range contains no data.")
 
+    # Extract placeholders and build mappings dynamically
+    detected_tags = extract_placeholders_from_pptx(pptx_bytes)
+    mapping_dict, image_mappings = build_auto_mapping(detected_tags, list(df.columns))
+
     image_map = get_excel_images(excel_bytes)
     prs = Presentation(io.BytesIO(pptx_bytes))
     if len(prs.slides) != 1:
@@ -473,43 +543,64 @@ def run_automation(excel_bytes, pptx_bytes, from_row, to_row):
         slide = prs.slides[i]
         excel_row_num = original_idx + 2
 
-        replacements = {
-            "[ITEM_NUM]": safe_text(row.get('Item #', '')),
-            "[ITEM_NAME]": safe_text(row.get('Name', '')),
-            "[RETAIL]": safe_format(row.get('Retail', row.get('Unit Retail', 0)), is_currency=True),
-            "[COST]": safe_format(row.get('Unit Cost', 0), is_currency=True),
-            "[IMU]": safe_format(row.get('IMU%', 0), is_percent=True),
-            "[PROJ_UNITS]": safe_format(row.get('Projected Sales Units', 0)),
-            "[PROJ_RTL]": safe_format(row.get('Projected Sales Rtl', 0), is_currency=True),
-            "[FEAT_1]": safe_text(row.get('Key Product Feature #1', '')),
-            "[FEAT_2]": safe_text(row.get('Key Product Feature #2', '')),
-            "[FEAT_3]": safe_text(row.get('Key Product Feature #3', '')),
-            "[BEN_1]": safe_text(row.get('Associated Customer Benefit #1', '')),
-            "[BEN_2]": safe_text(row.get('Associated Customer Benefit #2', '')),
-            "[BEN_3]": safe_text(row.get('Associated Customer Benefit #3', '')),
-            
-            # --- New Mappings ---
-            "[CATEGORY]": safe_text(row.get('Category', '')),
-            "[DES]": safe_text(row.get('Description', '')),
-            "[MAT]": safe_text(row.get('Material', '')),
-            "[DIM]": safe_text(row.get('Dimensions', '')), 
-            "[COLOR]": safe_text(row.get('Color', '')),
-            "[COUNTRY]": safe_text(row.get('Country', '')),
-        }
+        # Build replacements dynamically for this row
+        placeholders = {}
+        for tag, mapping in mapping_dict.items():
+            col = mapping.get("column", "")
+            fmt = mapping.get("format", "Text")
+            if not col or col not in row:
+                placeholders[tag] = f"({tag} Unmapped)"
+                continue
+                
+            raw_val = row[col]
+            if pd.isna(raw_val):
+                placeholders[tag] = ""
+                continue
+                
+            if fmt == "Currency":
+                symbol = mapping.get("symbol", "$")
+                placeholders[tag] = safe_format(raw_val, is_currency=True, currency_symbol=symbol)
+            elif fmt == "Percentage":
+                placeholders[tag] = safe_format(raw_val, is_percent=True)
+            elif fmt == "Integer":
+                placeholders[tag] = safe_format(raw_val)
+            else:
+                placeholders[tag] = safe_text(raw_val)
 
+        # Replace text
         for shape in slide.shapes:
-            replace_text_in_shape(shape, replacements)
+            replace_text_in_shape(shape, placeholders)
 
-        placeholder = find_image_placeholder(slide)
-        if excel_row_num in image_map:
-            if placeholder:
-                insert_image_into_placeholder(slide, image_map[excel_row_num], placeholder)
-        else:
-            if placeholder:
-                for para in placeholder.text_frame.paragraphs:
-                    for run in para.runs:
-                        run.text = ""
-                placeholder.fill.background()
+        # Replace images dynamically based on mappings
+        for img_tag, col_name in image_mappings.items():
+            img_bytes = image_map.get(excel_row_num)
+            
+            # Find matching shape
+            ph_shape = None
+            for shape in slide.shapes:
+                if shape.has_text_frame and img_tag in shape.text_frame.text:
+                    ph_shape = shape
+                    break
+                    
+            if ph_shape:
+                if img_bytes:
+                    insert_image_into_placeholder(slide, img_bytes, ph_shape)
+                else:
+                    for para in ph_shape.text_frame.paragraphs:
+                        for run in para.runs:
+                            run.text = ""
+                    ph_shape.fill.background()
+            else:
+                # Fallback to generic picture placeholder search
+                placeholder = find_image_placeholder(slide)
+                if placeholder:
+                    if img_bytes:
+                        insert_image_into_placeholder(slide, img_bytes, placeholder)
+                    else:
+                        for para in placeholder.text_frame.paragraphs:
+                            for run in para.runs:
+                                run.text = ""
+                        placeholder.fill.background()
 
     output = io.BytesIO()
     prs.save(output)
@@ -578,7 +669,8 @@ def render_slide_preview(pptx_bytes, mapping_dict, image_mappings=None, excel_ro
         if pd.isna(raw_val):
             return ""
         if fmt == "Currency":
-            return safe_format(raw_val, is_currency=True)
+            symbol = mapping_dict[tag].get("symbol", "$")
+            return safe_format(raw_val, is_currency=True, currency_symbol=symbol)
         elif fmt == "Percentage":
             return safe_format(raw_val, is_percent=True)
         elif fmt == "Integer":
@@ -1161,49 +1253,8 @@ if current_page == "create":
                 if excel_bytes and pptx_bytes:
                     try:
                         _df_am = pd.read_excel(io.BytesIO(excel_bytes))
-                        columns = list(_df_am.columns)
-                        
-                        retail_col = "Retail" if "Retail" in columns else "Unit Retail" if "Unit Retail" in columns else "Retail"
-                        
-                        # Populate UI mapping dict matching the replacements in engine
-                        all_hardcoded_tags = {
-                            "[ITEM_NUM]": ("Item #", "Text"),
-                            "[ITEM_NAME]": ("Name", "Text"),
-                            "[RETAIL]": (retail_col, "Currency"),
-                            "[COST]": ("Unit Cost", "Currency"),
-                            "[IMU]": ("IMU%", "Percentage"),
-                            "[PROJ_UNITS]": ("Projected Sales Units", "Integer"),
-                            "[PROJ_RTL]": ("Projected Sales Rtl", "Currency"),
-                            "[FEAT_1]": ("Key Product Feature #1", "Text"),
-                            "[FEAT_2]": ("Key Product Feature #2", "Text"),
-                            "[FEAT_3]": ("Key Product Feature #3", "Text"),
-                            "[BEN_1]": ("Associated Customer Benefit #1", "Text"),
-                            "[BEN_2]": ("Associated Customer Benefit #2", "Text"),
-                            "[BEN_3]": ("Associated Customer Benefit #3", "Text"),
-                            "[CATEGORY]": ("Category", "Text"),
-                            "[DES]": ("Description", "Text"),
-                            "[MAT]": ("Material", "Text"),
-                            "[DIM]": ("Dimensions", "Text"),
-                            "[COLOR]": ("Color", "Text"),
-                            "[COUNTRY]": ("Country", "Text"),
-                        }
-                        
-                        for tag, (col, fmt) in all_hardcoded_tags.items():
-                            if col in columns:
-                                mapping_dict[tag] = {"column": col, "format": fmt}
-                                
-                        # Detect PPTX image placeholder to map for preview
-                        try:
-                            prs_check = Presentation(io.BytesIO(pptx_bytes))
-                            slide_check = prs_check.slides[0]
-                            for shape in slide_check.shapes:
-                                if shape.has_text_frame:
-                                    text_lower = shape.text_frame.text.lower()
-                                    if "insert product" in text_lower or "picture here" in text_lower:
-                                        image_mappings[shape.text_frame.text] = "Image"
-                                        break
-                        except:
-                            pass
+                        _detected_tags = extract_placeholders_from_pptx(pptx_bytes)
+                        mapping_dict, image_mappings = build_auto_mapping(_detected_tags, list(_df_am.columns))
                     except:
                         pass
                         
@@ -1370,9 +1421,14 @@ if current_page == "create":
             <div style="background:#FFF8F2; border:1px solid #E8D9CA; border-radius:8px; padding:12px; display:flex; gap:10px; align-items:flex-start;">
                 <span style="font-size:16px;">💡</span>
                 <div>
-                    <div style="font-weight:700; color:#8B6F4E; font-size:12px; margin-bottom:2px;">Placeholder Tip</div>
-                    <div style="font-size:11px; color:#5C483A; line-height:1.4;">
-                        Ensure the placeholders in your template are named exactly like the hardcoded engine tags: <code>[ITEM_NUM]</code>, <code>[ITEM_NAME]</code>, <code>[RETAIL]</code>, <code>[COST]</code>, <code>[IMU]</code>, <code>[PROJ_UNITS]</code>, <code>[PROJ_RTL]</code>, <code>[CATEGORY]</code>, <code>[DES]</code>, <code>[MAT]</code>, <code>[DIM]</code>, <code>[COLOR]</code>, <code>[COUNTRY]</code>. Place images inside a container text box containing <code>insert product</code> or <code>picture here</code>.
+                    <div style="font-weight:700; color:#8B6F4E; font-size:12px; margin-bottom:2px;">Dynamic Placeholder Tip</div>
+                    <div style="font-size:11.5px; color:#5C483A; line-height:1.45;">
+                        Placeholders in your slide template are dynamically matched to Excel column headers (case-insensitively). Standardize your placeholders by adding the formatting type in parentheses:
+                        <br/>• <b>Text</b>: <code>[Column Name (Text)]</code>
+                        <br/>• <b>Currency</b>: <code>[Column Name (Currency $)]</code> (supports $, €, £, ¥, ₹)
+                        <br/>• <b>Percentage</b>: <code>[Column Name (Percentage)]</code> (formats as %)
+                        <br/>• <b>Integer</b>: <code>[Column Name (Integer)]</code> (formats with commas)
+                        <br/>• <b>Image</b>: <code>[Column Name (Image)]</code> (embeds row-specific pictures)
                     </div>
                 </div>
             </div>
