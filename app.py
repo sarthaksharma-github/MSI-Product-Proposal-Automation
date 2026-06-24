@@ -41,7 +41,8 @@ if not os.path.exists(dst_logo):
 st.set_page_config(
     page_title="MSI Slide Automation Tool",
     page_icon="📊",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 # ══════════════════════════════════════════════════════════════
@@ -53,9 +54,14 @@ st.markdown("""
   @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
 
   /* Global resets and body styling */
-  html, body, [class*="css"], [class*="st-"] {
+  html, body, [data-testid="stAppViewContainer"] {
     font-family: 'Plus Jakarta Sans', sans-serif !important;
     background-color: #FAF8F5 !important;
+  }
+  
+  /* Apply font family to all child elements safely without forcing background-colors */
+  [data-testid="stAppViewContainer"] * {
+    font-family: 'Plus Jakarta Sans', sans-serif !important;
   }
   
   .main .block-container { 
@@ -63,7 +69,12 @@ st.markdown("""
     max-width: 1250px !important; 
   }
   
-  #MainMenu, footer, header { visibility: hidden; }
+  #MainMenu, footer { visibility: hidden; }
+  
+  /* Make header bar transparent so collapse button is visible but background is hidden */
+  div[data-testid="stHeader"] {
+    background-color: rgba(0,0,0,0) !important;
+  }
 
   /* Style all vertical block border containers (cards) */
   div[data-testid="stVerticalBlockBorder"] {
@@ -549,38 +560,20 @@ def save_mapping_config(config):
     except:
         pass
 
-def render_slide_preview(mapping_dict, image_mappings=None, excel_row=None, image_map=None, excel_row_idx=None, is_template_mode=False):
+def render_slide_preview(pptx_bytes, mapping_dict, image_mappings=None, excel_row=None, image_map=None, excel_row_idx=None, is_template_mode=False):
     if image_mappings is None:
         image_mappings = {}
     if image_map is None:
         image_map = {}
         
-    title_tag = None
-    sku_tag = None
-    feature_tags = []
-    benefit_tags = []
-    metadata_tags = []
-    
-    for tag in mapping_dict.keys():
-        tag_lower = tag.lower()
-        if not title_tag and ("name" in tag_lower or "title" in tag_lower):
-            title_tag = tag
-        elif not sku_tag and ("num" in tag_lower or "sku" in tag_lower or "id" in tag_lower or "#" in tag_lower):
-            sku_tag = tag
-        elif "feat" in tag_lower:
-            feature_tags.append(tag)
-        elif "ben" in tag_lower:
-            benefit_tags.append(tag)
-        else:
-            metadata_tags.append(tag)
-            
-    feature_tags.sort()
-    benefit_tags.sort()
-    metadata_tags.sort()
-    
-    all_tags = list(mapping_dict.keys())
-    if not title_tag and all_tags:
-        title_tag = all_tags[0]
+    try:
+        prs = Presentation(io.BytesIO(pptx_bytes))
+        slide_w = prs.slide_width
+        slide_h = prs.slide_height
+        slide = prs.slides[0]
+    except Exception as e:
+        st.error(f"Error loading preview: {e}")
+        return
         
     def get_val(tag):
         if is_template_mode:
@@ -593,200 +586,109 @@ def render_slide_preview(mapping_dict, image_mappings=None, excel_row=None, imag
         if pd.isna(raw_val):
             return ""
         if fmt == "Currency":
-            return safe_format(raw_val, is_currency=True)
+            symbol = mapping_dict[tag].get("symbol", "$")
+            return safe_format(raw_val, is_currency=True, currency_symbol=symbol)
         elif fmt == "Percentage":
             return safe_format(raw_val, is_percent=True)
         elif fmt == "Integer":
             return safe_format(raw_val)
         return safe_text(raw_val)
-        
-    title_val = get_val(title_tag) if title_tag else "Sample Product Title"
-    sku_val = get_val(sku_tag) if sku_tag else "SKU-000000"
-    
-    features_html = ""
-    for f_tag in feature_tags:
-        val = get_val(f_tag)
-        if val:
-            features_html += f"<li>{val}</li>"
-    if not features_html:
-        features_html = "<li>Key Product Feature #1</li><li>Key Product Feature #2</li>"
-        
-    benefits_html = ""
-    for b_tag in benefit_tags:
-        val = get_val(b_tag)
-        if val:
-            benefits_html += f"<li>{val}</li>"
-    if not benefits_html:
-        benefits_html = "<li>Customer Benefit #1</li><li>Customer Benefit #2</li>"
 
-    details_html = ""
-    for m_tag in metadata_tags:
-        val = get_val(m_tag)
-        label = m_tag.replace("[", "").replace("]", "").replace("_", " ").title()
-        details_html += f"""
-        <div style="display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #F0EAE1;">
-            <span style="font-weight: 600; color: #5C483A; font-size: 12px;">{label}</span>
-            <span style="color: #2C1F14; font-size: 12px; font-weight: 500;">{val or '—'}</span>
-        </div>
-        """
-        
-    def _img_box(label, img_bytes_val):
-        if is_template_mode:
-            return f'<div style="flex:1;min-width:140px;height:200px;background:#EFECE8;border:2px dashed #C8B8AA;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#8B6F4E;font-weight:600;font-size:12px;text-align:center;padding:6px;">{label}</div>'
-        if img_bytes_val:
-            b64 = base64.b64encode(img_bytes_val).decode('utf-8')
-            return f'<img src="data:image/jpeg;base64,{b64}" style="flex:1;min-width:140px;height:200px;object-fit:contain;background:#FFF;border-radius:6px;border:1px solid #E4D6CA;padding:4px;"/>'
-        return f'<div style="flex:1;min-width:140px;height:200px;background:#F9F6F3;border:1px solid #E4D6CA;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#C4B0A0;font-style:italic;font-size:12px;">No image for {label}</div>'
+    shapes_html = []
+    for shape in slide.shapes:
+        try:
+            l_pct = (shape.left / slide_w) * 100
+            t_pct = (shape.top / slide_h) * 100
+            w_pct = (shape.width / slide_w) * 100
+            h_pct = (shape.height / slide_h) * 100
+            
+            l_pct = max(0.0, min(100.0, l_pct))
+            t_pct = max(0.0, min(100.0, t_pct))
+            w_pct = max(0.0, min(100.0 - l_pct, w_pct))
+            h_pct = max(0.0, min(100.0 - t_pct, h_pct))
 
-    images_html_parts = []
-    if image_mappings:
-        for img_tag, col_name in image_mappings.items():
-            if is_template_mode:
-                images_html_parts.append(_img_box(img_tag, None))
-            else:
-                col_idx = None
-                if excel_row is not None and col_name:
+            is_img_ph = False
+            img_tag_matched = None
+            
+            if shape.has_text_frame:
+                # Check if it contains an image placeholder tag
+                for img_tag in image_mappings.keys():
+                    if img_tag in shape.text_frame.text:
+                        is_img_ph = True
+                        img_tag_matched = img_tag
+                        break
+
+            if is_img_ph and img_tag_matched:
+                col_name = image_mappings[img_tag_matched]
+                img_bytes_val = None
+                if not is_template_mode and excel_row is not None and col_name:
                     cols = list(excel_row.keys())
                     if col_name in cols:
                         col_idx = cols.index(col_name)
-                img_bytes_val = image_map.get((excel_row_idx, col_idx)) if col_idx is not None and excel_row_idx is not None else None
-                images_html_parts.append(_img_box(img_tag, img_bytes_val))
-    else:
-        images_html_parts.append(_img_box('[IMAGE]', None))
-
-    img_html = f'<div style="display:flex;gap:10px;flex-wrap:wrap;">{" ".join(images_html_parts)}</div>'
-            
-    html_content = f"""
-    <div style="font-family: 'DM Sans', sans-serif; background: #FFFFFF; border: 1px solid #E4D6CA; border-radius: 10px; box-shadow: 0 4px 12px rgba(44, 31, 20, 0.06); padding: 20px; max-width: 100%; margin: 10px auto;">
-        <div style="display: flex; justify-content: space-between; align-items: baseline; border-bottom: 2px solid #8B6F4E; padding-bottom: 8px; margin-bottom: 15px;">
-            <h3 style="margin: 0; color: #2C1F14; font-size: 18px; font-weight: 600;">{title_val}</h3>
-            <span style="font-size: 11px; background: #FFF3E8; border: 1px solid #E4D6CA; color: #8B6F4E; padding: 2px 8px; border-radius: 20px; font-weight: 600;">{sku_val}</span>
-        </div>
-        
-        <div style="display: flex; gap: 20px; flex-wrap: wrap;">
-            <div style="flex: 1.2; min-width: 280px; display: flex; flex-direction: column; gap: 15px;">
-                <div>
-                    <h4 style="margin: 0 0 6px 0; color: #8B6F4E; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #E4D6CA; padding-bottom: 3px;">Details</h4>
-                    {details_html or '<div style="color:#C4B0A0; font-size:12px; font-style:italic;">No metadata mapped</div>'}
+                        if excel_row_idx is not None and col_idx is not None:
+                            img_bytes_val = image_map.get((excel_row_idx, col_idx))
+                            
+                if img_bytes_val:
+                    b64 = base64.b64encode(img_bytes_val).decode('utf-8')
+                    img_src_html = f'<img src="data:image/jpeg;base64,{b64}" style="width:100%; height:100%; object-fit:contain;"/>'
+                else:
+                    img_src_html = f"""
+                    <div style="width:100%; height:100%; background:#FAF8F5; border:1.5px dashed #CFC0B0; border-radius:6px; display:flex; align-items:center; justify-content:center; color:#8B6F4E; font-size:9.5px; text-align:center; padding:6px; font-weight:700;">
+                        {img_tag_matched}
+                    </div>
+                    """
+                shapes_html.append(f"""
+                <div style="position: absolute; left: {l_pct}%; top: {t_pct}%; width: {w_pct}%; height: {h_pct}%;">
+                    {img_src_html}
                 </div>
+                """)
+            elif shape.has_text_frame:
+                text = shape.text_frame.text
+                if not text.strip():
+                    continue
+                    
+                display_text = text
+                pattern = re.compile(r'\[([^\]]+)\]')
+                for match in pattern.findall(text):
+                    full_tag = f"[{match.strip()}]"
+                    if full_tag in mapping_dict:
+                        display_text = display_text.replace(full_tag, get_val(full_tag))
+                        
+                display_text_html = display_text.replace('\n', '<br>')
                 
-                <div style="display: flex; gap: 15px;">
-                    <div style="flex: 1;">
-                        <h4 style="margin: 0 0 6px 0; color: #8B6F4E; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;">Key Features</h4>
-                        <ul style="margin: 0; padding-left: 16px; color: #5C483A; font-size: 11.5px; line-height: 1.4;">
-                            {features_html}
-                        </ul>
-                    </div>
-                    <div style="flex: 1;">
-                        <h4 style="margin: 0 0 6px 0; color: #8B6F4E; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;">Benefits</h4>
-                        <ul style="margin: 0; padding-left: 16px; color: #5C483A; font-size: 11.5px; line-height: 1.4;">
-                            {benefits_html}
-                        </ul>
-                    </div>
+                # Render text frame wrapper
+                shapes_html.append(f"""
+                <div style="position: absolute; left: {l_pct}%; top: {t_pct}%; width: {w_pct}%; height: {h_pct}%; overflow: hidden; font-size: 10px; color: #2C1F14; line-height: 1.35; font-weight: 500; font-family:'Plus Jakarta Sans',sans-serif; text-align: left;">
+                    {display_text_html}
                 </div>
-            </div>
-            
-            <div style="flex: 0.8; min-width: 220px; display: flex; align-items: center; justify-content: center;">
-                {img_html}
-            </div>
+                """)
+            elif shape.shape_type == 13 or hasattr(shape, 'image'):
+                img_src_html = """
+                <div style="width:100%; height:100%; background:#FAF8F5; border:1px solid #EDE8E1; border-radius:6px; display:flex; align-items:center; justify-content:center; color:#8B6F4E; font-size:9.5px; font-weight:700;">
+                    📷 IMAGE
+                </div>
+                """
+                shapes_html.append(f"""
+                <div style="position: absolute; left: {l_pct}%; top: {t_pct}%; width: {w_pct}%; height: {h_pct}%;">
+                    {img_src_html}
+                </div>
+                """)
+        except:
+            pass
+
+    aspect_ratio = slide_w / slide_h
+    html_content = f"""
+    <div style="position: relative; width: 100%; padding-bottom: {100 / aspect_ratio}%; background: #FFFFFF; border: 1.5px solid #E4D6CA; border-radius: 8px; box-shadow: 0 4px 12px rgba(44, 31, 20, 0.04); overflow: hidden; margin: 10px 0;">
+        <div style="position: absolute; left: 0; top: 0; right: 0; bottom: 0; padding: 4%;">
+            {"".join(shapes_html)}
         </div>
     </div>
     """
     components.html(
-        f"""<!DOCTYPE html><html><head><link href='https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&display=swap' rel='stylesheet'></head><body style='margin:0;padding:0;background:transparent;'>{html_content}</body></html>""",
-        height=420,
+        f"""<!DOCTYPE html><html><head><link href='https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap' rel='stylesheet'><style>body {{ font-family: 'Plus Jakarta Sans', sans-serif; margin:0; padding:0; background:transparent; }}</style></head><body>{html_content}</body></html>""",
+        height=240,
         scrolling=False
     )
-
-def run_automation(excel_bytes, pptx_bytes, from_row, to_row, mapping_dict, image_mappings):
-    if image_mappings is None:
-        image_mappings = {}
-    df = pd.read_excel(io.BytesIO(excel_bytes))
-
-    start_idx = max(0, from_row - 2)
-    end_idx = min(to_row - 1, len(df))
-    df_subset = df.iloc[start_idx:end_idx].copy()
-
-    if df_subset.empty:
-        raise ValueError("Selected row range contains no data.")
-
-    col_to_images = get_excel_images(excel_bytes)
-    df_cols = list(df.columns)
-
-    prs = Presentation(io.BytesIO(pptx_bytes))
-    if len(prs.slides) != 1:
-        raise ValueError("Template must have exactly 1 slide.")
-
-    source_slide = prs.slides[0]
-    for _ in range(len(df_subset) - 1):
-        clone_slide(prs, source_slide)
-
-    for i, (original_idx, row) in enumerate(df_subset.iterrows()):
-        slide = prs.slides[i]
-
-        replacements = {}
-        for tag, cfg in mapping_dict.items():
-            col    = cfg.get("column", "")
-            fmt    = cfg.get("format", "Text")
-            symbol = cfg.get("symbol", "$")
-            if not col:
-                continue
-            val = row.get(col, "")
-            if pd.isna(val):
-                val = ""
-            if fmt == "Currency":
-                formatted_val = safe_format(val, is_currency=True, currency_symbol=symbol)
-            elif fmt == "Percentage":
-                formatted_val = safe_format(val, is_percent=True)
-            elif fmt == "Integer":
-                formatted_val = safe_format(val)
-            else:
-                formatted_val = safe_text(val)
-            replacements[tag] = formatted_val
-
-        for shape in slide.shapes:
-            replace_text_in_shape(shape, replacements)
-
-        for shape in slide.shapes:
-            purge_empty_paragraphs(shape)
-
-        if image_mappings:
-            for img_tag, col_name in image_mappings.items():
-                if not col_name or col_name not in df_cols:
-                    continue
-                col_idx = df_cols.index(col_name)
-                imgs = col_to_images.get(col_idx, [])
-                img_bytes = imgs[i] if i < len(imgs) else None
-
-                ph_shape = None
-                for shape in slide.shapes:
-                    if shape.has_text_frame and img_tag in shape.text_frame.text:
-                        ph_shape = shape
-                        break
-                if ph_shape:
-                    if img_bytes:
-                        insert_image_into_placeholder(slide, img_bytes, ph_shape)
-                    else:
-                        for para in ph_shape.text_frame.paragraphs:
-                            for run in para.runs:
-                                run.text = ""
-                        ph_shape.fill.background()
-        else:
-            placeholder = find_image_placeholder(slide)
-            if placeholder:
-                all_imgs = [b for imgs in col_to_images.values() for b in imgs]
-                img_bytes = all_imgs[i] if i < len(all_imgs) else None
-                if img_bytes:
-                    insert_image_into_placeholder(slide, img_bytes, placeholder)
-                else:
-                    for para in placeholder.text_frame.paragraphs:
-                        for run in para.runs:
-                            run.text = ""
-                    placeholder.fill.background()
-
-    output = io.BytesIO()
-    prs.save(output)
-    return output.getvalue(), len(df_subset)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -1202,9 +1104,9 @@ if current_page == "create":
                 </div>
                 """, unsafe_allow_html=True)
                 
-                # Starter Excel file downloader
+                # Starter Excel file downloader (only for pre-existing templates)
                 excel_templates = get_available_excel_templates()
-                if excel_templates:
+                if excel_templates and st.session_state.start_option == "pre_existing":
                     st.markdown("<p style='font-size:11px;font-weight:700;color:#8B6F4E;margin-bottom:6px;text-transform:uppercase;'>⬇️ Starter Excel Templates</p>", unsafe_allow_html=True)
                     _tc1, _tc2 = st.columns([3, 1])
                     with _tc1:
@@ -1404,10 +1306,21 @@ if current_page == "create":
                         df = pd.read_excel(io.BytesIO(st.session_state.excel_file_bytes))
                         row_idx = max(0, int(from_row) - 2)
                         if row_idx < len(df):
+                            try:
+                                col_to_images = get_excel_images(st.session_state.excel_file_bytes)
+                                image_map = {}
+                                for col_idx, imgs in col_to_images.items():
+                                    for r_idx, img_bytes in enumerate(imgs):
+                                        image_map[(r_idx, col_idx)] = img_bytes
+                            except:
+                                image_map = {}
+
                             render_slide_preview(
+                                pptx_bytes,
                                 mapping_dict, 
                                 image_mappings=image_mappings, 
                                 excel_row=df.iloc[row_idx].to_dict(),
+                                image_map=image_map,
                                 excel_row_idx=row_idx,
                                 is_template_mode=False
                             )
@@ -1416,7 +1329,7 @@ if current_page == "create":
                     except Exception as e:
                         st.info(f"Unable to parse Excel preview: {e}")
                 else:
-                    render_slide_preview(mapping_dict, is_template_mode=True)
+                    render_slide_preview(pptx_bytes, mapping_dict, is_template_mode=True)
             else:
                 st.markdown("""
                 <div style="background:#FAF8F5;border:1px dashed #CFC0B0;border-radius:8px;height:180px;display:flex;align-items:center;justify-content:center;color:#B8A898;font-size:12px;font-style:italic;margin-bottom:15px;text-align:center;padding:15px;">
