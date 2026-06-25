@@ -23,25 +23,42 @@ except Exception as e:
     pass
 
 # ══════════════════════════════════════════════════════════════
-#  MSI LOGO AUTO-COPY ROUTINE
+#  MSI LOGO FETCH ROUTINE (GitHub Remote / Local Fallback)
 # ══════════════════════════════════════════════════════════════
-import shutil
+import urllib.request
 project_dir = os.path.dirname(os.path.abspath(__file__))
 dst_logo = os.path.join(project_dir, "msi_logo.png")
 
-# Try to find logo in brain folder or current dir
-logo_copied = False
-brain_dir = r"C:\Users\sarthak.s\.gemini\antigravity\brain\c86fcd1e-6a81-44ad-9eeb-5fce89a06592"
-possible_logos = ["media__1782310810983.png", "media__1782309457101.png", "media__1782309064522.png"]
-for l_name in possible_logos:
-    src_path = os.path.join(brain_dir, l_name)
-    if os.path.exists(src_path):
-        try:
-            shutil.copy(src_path, dst_logo)
-            logo_copied = True
-            break
-        except:
-            pass
+logo_fetched = False
+
+# Try to fetch directly from the GitHub repository raw assets
+try:
+    logo_url = "https://raw.githubusercontent.com/sarthaksharma-github/MSI-Product-Proposal-Automation/main/assets/msi_logo.png"
+    req = urllib.request.Request(
+        logo_url, 
+        headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    )
+    with urllib.request.urlopen(req, timeout=5) as response:
+        with open(dst_logo, "wb") as f:
+            f.write(response.read())
+    logo_fetched = True
+except Exception as e:
+    pass
+
+# Fallback: Try to copy from local brain folder if remote fetch fails
+if not logo_fetched:
+    import shutil
+    brain_dir = r"C:\Users\sarthak.s\.gemini\antigravity\brain\c86fcd1e-6a81-44ad-9eeb-5fce89a06592"
+    possible_logos = ["media__1782310810983.png", "media__1782309457101.png", "media__1782309064522.png"]
+    for l_name in possible_logos:
+        src_path = os.path.join(brain_dir, l_name)
+        if os.path.exists(src_path):
+            try:
+                shutil.copy(src_path, dst_logo)
+                logo_fetched = True
+                break
+            except:
+                pass
 
 # ══════════════════════════════════════════════════════════════
 #  PAGE CONFIG
