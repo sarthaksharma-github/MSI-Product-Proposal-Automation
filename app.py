@@ -401,11 +401,26 @@ def clone_slide(prs, source_slide):
 def get_excel_images(excel_bytes):
     wb = openpyxl.load_workbook(io.BytesIO(excel_bytes))
     ws = wb.active
-    image_map = {}
+    
+    # Map 0-based column index to the normalized header name
+    col_headers = {}
+    for col_idx in range(1, ws.max_column + 1):
+        cell_val = ws.cell(row=1, column=col_idx).value
+        if cell_val is not None:
+            normalized = re.sub(r'\s+', ' ', re.sub(r'[\[\]_]', ' ', str(cell_val))).strip().lower()
+            col_headers[col_idx - 1] = normalized
+            
+    image_map = {}  # row -> {normalized_col_name: img_data}
     for img in ws._images:
         try:
-            row = img.anchor._from.row + 1
-            image_map[row] = img._data()
+            col_idx = img.anchor._from.col
+            row_idx = img.anchor._from.row + 1
+            
+            normalized_header = col_headers.get(col_idx)
+            if normalized_header:
+                if row_idx not in image_map:
+                    image_map[row_idx] = {}
+                image_map[row_idx][normalized_header] = img._data()
         except:
             pass
     return image_map
@@ -643,9 +658,11 @@ def run_automation(excel_bytes, pptx_bytes, from_row, to_row):
 
         # Replace images dynamically based on mappings
         images_inserted = False
+        row_images = image_map.get(excel_row_num, {})
         
         for img_tag, col_name in image_mappings.items():
-            img_bytes = image_map.get(excel_row_num)
+            normalized_col = re.sub(r'\s+', ' ', re.sub(r'[\[\]_]', ' ', str(col_name))).strip().lower()
+            img_bytes = row_images.get(normalized_col)
             
             # Find matching shape by semantic tag
             ph_shape = None
@@ -665,10 +682,10 @@ def run_automation(excel_bytes, pptx_bytes, from_row, to_row):
                     ph_shape.fill.background()
         
         # Fallback to generic placeholder search only if no semantic tags found images
-        if not images_inserted and image_map.get(excel_row_num):
+        if not images_inserted and row_images:
             placeholder = find_image_placeholder(slide)
             if placeholder:
-                img_bytes = image_map.get(excel_row_num)
+                img_bytes = list(row_images.values())[0]
                 insert_image_into_placeholder(slide, img_bytes, placeholder)
             else:
                 # Last resort: find ANY shape with image-related keywords
@@ -676,7 +693,7 @@ def run_automation(excel_bytes, pptx_bytes, from_row, to_row):
                     if shape.has_text_frame and shape != slide.shapes[0]:  # Skip first shape (usually title)
                         text_lower = shape.text_frame.text.lower()
                         if any(kw in text_lower for kw in ["insert", "picture", "image", "photo"]):
-                            img_bytes = image_map.get(excel_row_num)
+                            img_bytes = list(row_images.values())[0]
                             if img_bytes:
                                 insert_image_into_placeholder(slide, img_bytes, shape)
                                 break
@@ -783,7 +800,10 @@ def render_slide_preview(pptx_bytes, mapping_dict, image_mappings=None, excel_ro
             if is_img_ph and img_tag_matched:
                 img_bytes_val = None
                 if not is_template_mode and excel_row_idx is not None:
-                    img_bytes_val = image_map.get(excel_row_idx + 2)
+                    col_name = image_mappings.get(img_tag_matched)
+                    if col_name:
+                        normalized_col = re.sub(r'\s+', ' ', re.sub(r'[\[\]_]', ' ', str(col_name))).strip().lower()
+                        img_bytes_val = image_map.get(excel_row_idx + 2, {}).get(normalized_col)
                             
                 if img_bytes_val:
                     b64 = base64.b64encode(img_bytes_val).decode('utf-8')
@@ -1022,7 +1042,7 @@ if os.path.exists(logo_path):
 # Sidebar Logo Header
 sidebar_logo_html = f"""
 <div class="logo-box" style="text-align: center; padding: 20px 10px; border-bottom: 1px solid #EDE8E1; margin-bottom: 20px;">
-    {"<img class='logo-img' src='data:image/png;base64," + logo_b64 + "' style='max-height:150px; max-width:100%; object-fit:contain; margin-bottom:8px; display:block; margin-left:auto; margin-right:auto;'/>" if logo_b64 else "<div class='logo-text' style='font-size:20px; font-weight:800; color:#8B6F4E; letter-spacing:2px;'>MSI SERVICES</div>"}
+    {"<img class='logo-img' src='data:image/png;base64," + logo_b64 + "' style='max-height:150px; width:100%; object-fit:contain; margin-bottom:8px; display:block; margin-left:auto; margin-right:auto;'/>" if logo_b64 else "<div class='logo-text' style='font-size:20px; font-weight:800; color:#8B6F4E; letter-spacing:2px;'>MSI SERVICES</div>"}
     <div class="logo-sub" style="font-size:10.5px; color:#8B6F4E; font-weight:600; letter-spacing:0.2px; line-height:1.3; opacity:0.95; margin-top:4px;">Making Dream Surfaces Attainable</div>
 </div>
 """
