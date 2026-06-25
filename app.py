@@ -1022,7 +1022,7 @@ if os.path.exists(logo_path):
 # Sidebar Logo Header
 sidebar_logo_html = f"""
 <div class="logo-box" style="text-align: center; padding: 20px 10px; border-bottom: 1px solid #EDE8E1; margin-bottom: 20px;">
-    {"<img class='logo-img' src='data:image/png;base64," + logo_b64 + "' style='max-height:85px; max-width:100%; object-fit:contain; margin-bottom:8px; display:block; margin-left:auto; margin-right:auto;'/>" if logo_b64 else "<div class='logo-text' style='font-size:20px; font-weight:800; color:#8B6F4E; letter-spacing:2px;'>MSI SERVICES</div>"}
+    {"<img class='logo-img' src='data:image/png;base64," + logo_b64 + "' style='max-height:150px; max-width:100%; object-fit:contain; margin-bottom:8px; display:block; margin-left:auto; margin-right:auto;'/>" if logo_b64 else "<div class='logo-text' style='font-size:20px; font-weight:800; color:#8B6F4E; letter-spacing:2px;'>MSI SERVICES</div>"}
     <div class="logo-sub" style="font-size:10.5px; color:#8B6F4E; font-weight:600; letter-spacing:0.2px; line-height:1.3; opacity:0.95; margin-top:4px;">Making Dream Surfaces Attainable</div>
 </div>
 """
