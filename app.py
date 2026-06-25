@@ -458,7 +458,14 @@ def insert_image_into_placeholder(slide, img_bytes, placeholder):
         for run in para.runs:
             run.text = ""
 
-    img = PILImage.open(io.BytesIO(img_bytes)).convert('RGB')
+    img = PILImage.open(io.BytesIO(img_bytes))
+    if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+        alpha = img.convert('RGBA')
+        bg = PILImage.new('RGBA', img.size, (255, 255, 255, 255))
+        bg.paste(alpha, (0, 0), alpha)
+        img = bg.convert('RGB')
+    else:
+        img = img.convert('RGB')
     img_w, img_h = img.size
     target_ratio, img_ratio = width / height, img_w / img_h
 
