@@ -585,13 +585,16 @@ def replace_text_in_shape(shape, placeholders):
             for cell in row.cells:
                 process_text_frame(cell.text_frame, placeholders)
 
-def find_all_image_placeholders(slide, used_shapes=None):
+def _shape_key(shape):
+    return getattr(shape, 'shape_id', None) or id(shape)
+
+def find_all_image_placeholders(slide, used_shape_ids=None):
     """
     Returns all candidate image placeholder shapes on a slide, ordered top-to-bottom, then left-to-right.
-    Skips any shapes already in used_shapes.
+    Skips any shapes whose key is already in used_shape_ids.
     """
-    if used_shapes is None:
-        used_shapes = set()
+    if used_shape_ids is None:
+        used_shape_ids = set()
 
     ph_phrases = [
         "insert product", "picture here", "insert picture", "insert image",
@@ -602,7 +605,7 @@ def find_all_image_placeholders(slide, used_shapes=None):
 
     candidates = []
     for shape in slide.shapes:
-        if shape in used_shapes:
+        if _shape_key(shape) in used_shape_ids:
             continue
 
         # 1. Bracketed image tag in text frame
@@ -636,19 +639,20 @@ def find_all_image_placeholders(slide, used_shapes=None):
                 candidates.append(shape)
                 continue
 
-    # Deduplicate while preserving order
+    # Deduplicate while preserving order using shape keys
     seen = set()
     unique_candidates = []
     for s in candidates:
-        if id(s) not in seen:
-            seen.add(id(s))
+        s_k = _shape_key(s)
+        if s_k not in seen:
+            seen.add(s_k)
             unique_candidates.append(s)
 
     # Sort top-to-bottom, then left-to-right
     unique_candidates.sort(key=lambda s: (s.top, s.left))
     return unique_candidates
 
-def find_image_placeholder(slide, image_tag=None, used_shapes=None):
+def find_image_placeholder(slide, image_tag=None, used_shape_ids=None):
     """
     Finds an image placeholder shape on a slide using multiple fallback strategies:
     1. Shape containing specific image_tag (e.g. '[Image 1]' or '[Product Image]')
@@ -657,8 +661,8 @@ def find_image_placeholder(slide, image_tag=None, used_shapes=None):
     4. Native PowerPoint Picture Placeholder shape
     5. Shape by name
     """
-    if used_shapes is None:
-        used_shapes = set()
+    if used_shape_ids is None:
+        used_shape_ids = set()
 
     # 1. Look for specific tag if provided
     if image_tag:
@@ -670,7 +674,7 @@ def find_image_placeholder(slide, image_tag=None, used_shapes=None):
 
         # Check exact tag or inner tag in text frame
         for shape in slide.shapes:
-            if shape in used_shapes:
+            if _shape_key(shape) in used_shape_ids:
                 continue
             if shape.has_text_frame:
                 txt = shape.text_frame.text.lower()
@@ -680,7 +684,7 @@ def find_image_placeholder(slide, image_tag=None, used_shapes=None):
         # If tag has digit (e.g. 2 for Image 2), check for shapes with that digit or 'competitor'
         if tag_digit:
             for shape in slide.shapes:
-                if shape in used_shapes:
+                if _shape_key(shape) in used_shape_ids:
                     continue
                 if shape.has_text_frame:
                     txt = shape.text_frame.text.lower()
@@ -688,7 +692,7 @@ def find_image_placeholder(slide, image_tag=None, used_shapes=None):
                         return shape
 
     # Fallback to candidate image shapes sorted spatially
-    candidates = find_all_image_placeholders(slide, used_shapes=used_shapes)
+    candidates = find_all_image_placeholders(slide, used_shape_ids=used_shape_ids)
     return candidates[0] if candidates else None
 
 def insert_image_into_placeholder(slide, img_bytes, placeholder):
@@ -1000,7 +1004,7 @@ def run_automation(excel_bytes, pptx_bytes, from_row, to_row):
         row_fallback_img = row_imgs_list[0] if row_imgs_list else None
 
         # 3. Replace images dynamically based on image_mappings
-        used_shapes = set()
+        used_shape_ids = set()
         used_img_slots = set()
 
         # Step 3A: Tag-based placement
@@ -1024,7 +1028,7 @@ def run_automation(excel_bytes, pptx_bytes, from_row, to_row):
                 elif str(t_num) in row_images:
                     img_bytes = row_images.get(str(t_num))
 
-            ph_shape = find_image_placeholder(slide, image_tag=img_tag, used_shapes=used_shapes)
+            ph_shape = find_image_placeholder(slide, image_tag=img_tag, used_shape_ids=used_shape_ids)
             if ph_shape:
                 if not img_bytes:
                     for s_i, ib in enumerate(row_imgs_list):
@@ -1037,7 +1041,7 @@ def run_automation(excel_bytes, pptx_bytes, from_row, to_row):
 
                 if img_bytes:
                     insert_image_into_placeholder(slide, img_bytes, ph_shape)
-                    used_shapes.add(ph_shape)
+                    used_shape_ids.add(_shape_key(ph_shape))
                     if slot_idx is not None:
                         used_img_slots.add(slot_idx)
                 else:
@@ -1047,10 +1051,10 @@ def run_automation(excel_bytes, pptx_bytes, from_row, to_row):
                                 run.text = ""
                         try: ph_shape.fill.background()
                         except: pass
-                    used_shapes.add(ph_shape)
+                    used_shape_ids.add(_shape_key(ph_shape))
 
         # Step 3B: Assign any remaining image placeholder shapes to remaining images
-        remaining_shapes = find_all_image_placeholders(slide, used_shapes=used_shapes)
+        remaining_shapes = find_all_image_placeholders(slide, used_shape_ids=used_shape_ids)
         for ph_shape in remaining_shapes:
             img_bytes = None
             for s_i, ib in enumerate(row_imgs_list):
@@ -1060,10 +1064,10 @@ def run_automation(excel_bytes, pptx_bytes, from_row, to_row):
                     break
             if img_bytes:
                 insert_image_into_placeholder(slide, img_bytes, ph_shape)
-                used_shapes.add(ph_shape)
-            elif not used_shapes and row_fallback_img:
+                used_shape_ids.add(_shape_key(ph_shape))
+            elif not used_shape_ids and row_fallback_img:
                 insert_image_into_placeholder(slide, row_fallback_img, ph_shape)
-                used_shapes.add(ph_shape)
+                used_shape_ids.add(_shape_key(ph_shape))
 
         # 4. Replace text (AFTER image shapes have been matched!)
         for shape in slide.shapes:
@@ -1221,24 +1225,25 @@ def render_slide_preview(pptx_bytes, mapping_dict, image_mappings=None, excel_ro
                         b = row_imgs_list[s_idx]
                         used_preview_slots.add(s_idx)
                 if b:
-                    shape_img_map[id(shape)] = b
+                    shape_img_map[_shape_key(shape)] = b
 
         # 2. Match unassigned shapes to next available image in row_imgs_list
         for slot, (shape, tag) in enumerate(img_ph_candidates):
-            if id(shape) not in shape_img_map:
+            s_k = _shape_key(shape)
+            if s_k not in shape_img_map:
                 for s_i, ib in enumerate(row_imgs_list):
                     if s_i not in used_preview_slots:
-                        shape_img_map[id(shape)] = ib
+                        shape_img_map[s_k] = ib
                         used_preview_slots.add(s_i)
                         break
-                if id(shape) not in shape_img_map and row_imgs_list:
+                if s_k not in shape_img_map and row_imgs_list:
                     if slot < len(row_imgs_list):
-                        shape_img_map[id(shape)] = row_imgs_list[slot]
+                        shape_img_map[s_k] = row_imgs_list[slot]
                     else:
-                        shape_img_map[id(shape)] = row_imgs_list[0]
+                        shape_img_map[s_k] = row_imgs_list[0]
 
-    img_candidate_ids = {id(s) for s, _ in img_ph_candidates}
-    img_candidate_tags = {id(s): (tag or f"📷 Image {i+1}") for i, (s, tag) in enumerate(img_ph_candidates)}
+    img_candidate_ids = {_shape_key(s) for s, _ in img_ph_candidates}
+    img_candidate_tags = {_shape_key(s): (tag or f"📷 Image {i+1}") for i, (s, tag) in enumerate(img_ph_candidates)}
 
     shapes_html = []
     for shape in slide.shapes:
@@ -1253,11 +1258,11 @@ def render_slide_preview(pptx_bytes, mapping_dict, image_mappings=None, excel_ro
             w_pct = max(0.0, min(100.0 - l_pct, w_pct))
             h_pct = max(0.0, min(100.0 - t_pct, h_pct))
 
-            is_img_ph = (id(shape) in img_candidate_ids)
+            is_img_ph = (_shape_key(shape) in img_candidate_ids)
 
             if is_img_ph:
-                img_bytes_val = shape_img_map.get(id(shape))
-                img_label = img_candidate_tags.get(id(shape), "📷 Product Image")
+                img_bytes_val = shape_img_map.get(_shape_key(shape))
+                img_label = img_candidate_tags.get(_shape_key(shape), "📷 Product Image")
 
                 if img_bytes_val:
                     b64 = base64.b64encode(img_bytes_val).decode('utf-8')
