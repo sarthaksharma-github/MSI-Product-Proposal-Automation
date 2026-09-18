@@ -530,8 +530,25 @@ def get_excel_images(excel_bytes):
                         except:
                             num_img_cols = 1
 
-                    for idx, mf in enumerate(media_files):
+                    valid_media = []
+                    for mf in media_files:
                         img_data = zf.read(mf)
+                        if not img_data:
+                            continue
+                        try:
+                            im = PILImage.open(io.BytesIO(img_data))
+                            w, h = im.size
+                            # Exclude tiny icons/bullets (under 80x80 px)
+                            if w >= 80 and h >= 80:
+                                valid_media.append((mf, img_data, w, h))
+                        except:
+                            if len(img_data) > 2048:
+                                valid_media.append((mf, img_data, 0, 0))
+
+                    if not valid_media:
+                        valid_media = [(mf, zf.read(mf), 0, 0) for mf in media_files]
+
+                    for idx, (mf, img_data, w, h) in enumerate(valid_media):
                         if img_data:
                             row_num = (idx // num_img_cols) + 2
                             slot = idx % num_img_cols
@@ -597,9 +614,9 @@ def find_all_image_placeholders(slide, used_shape_ids=None):
         used_shape_ids = set()
 
     ph_phrases = [
-        "insert product", "picture here", "insert picture", "insert image",
-        "image here", "product picture", "product photo", "product image",
-        "competitor image", "competitor picture", "competitor photo", "similar competitor",
+        "insert product picture", "insert product photo", "insert product image",
+        "insert picture", "insert image", "picture here", "image here",
+        "product picture", "product photo", "product image",
         "add image", "add picture", "[image]", "[picture]", "[photo]", "[img]"
     ]
 
@@ -632,10 +649,10 @@ def find_all_image_placeholders(slide, used_shape_ids=None):
                 candidates.append(shape)
                 continue
 
-        # 4. Text containing keywords like 'image', 'picture', 'photo'
+        # 4. Text containing explicit image placeholder markers
         if shape.has_text_frame and shape != slide.shapes[0]:
             text_lower = shape.text_frame.text.lower().strip()
-            if any(kw in text_lower for kw in ["picture", "image", "photo", "competitor"]):
+            if any(kw in text_lower for kw in ["[image]", "[picture]", "[photo]", "insert picture", "insert image", "picture here", "image here"]):
                 candidates.append(shape)
                 continue
 
@@ -656,7 +673,7 @@ def find_image_placeholder(slide, image_tag=None, used_shape_ids=None):
     """
     Finds an image placeholder shape on a slide using multiple fallback strategies:
     1. Shape containing specific image_tag (e.g. '[Image 1]' or '[Product Image]')
-    2. Numbered tag match (e.g. tag 2 matches shape containing '2' or 'competitor')
+    2. Numbered tag match (e.g. tag 2 matches shape containing 'image 2')
     3. Generic image tag or text
     4. Native PowerPoint Picture Placeholder shape
     5. Shape by name
@@ -681,14 +698,14 @@ def find_image_placeholder(slide, image_tag=None, used_shape_ids=None):
                 if tag_l in txt or tag_clean in txt or tag_inner in txt:
                     return shape
 
-        # If tag has digit (e.g. 2 for Image 2), check for shapes with that digit or 'competitor'
+        # If tag has digit (e.g. 2 for Image 2), check for shapes with that explicit tag number
         if tag_digit:
             for shape in slide.shapes:
                 if _shape_key(shape) in used_shape_ids:
                     continue
                 if shape.has_text_frame:
                     txt = shape.text_frame.text.lower()
-                    if tag_digit in txt or (tag_digit == '2' and 'competitor' in txt):
+                    if f"image {tag_digit}" in txt or f"image_{tag_digit}" in txt or f"image{tag_digit}" in txt:
                         return shape
 
     # Fallback to candidate image shapes sorted spatially
@@ -722,12 +739,13 @@ def insert_image_into_placeholder(slide, img_bytes, placeholder):
 
     try:
         img = PILImage.open(io.BytesIO(img_bytes))
-        if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+        has_alpha = img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info)
+        if has_alpha:
             alpha = img.convert('RGBA')
             bg = PILImage.new('RGBA', img.size, (255, 255, 255, 255))
             bg.paste(alpha, (0, 0), alpha)
             img = bg.convert('RGB')
-        else:
+        elif img.mode != 'RGB':
             img = img.convert('RGB')
             
         img_w, img_h = img.size
@@ -744,7 +762,7 @@ def insert_image_into_placeholder(slide, img_bytes, placeholder):
             padded.paste(img, ((new_w - img_w) // 2, 0))
 
         output = io.BytesIO()
-        padded.save(output, format='JPEG', quality=95)
+        padded.save(output, format='PNG')
         output.seek(0)
         slide.shapes.add_picture(output, left, top, width, height)
     except Exception as e:
@@ -785,7 +803,7 @@ def extract_placeholders_from_pptx(pptx_bytes):
                         pass
                 if not is_pic and shape.has_text_frame and shape != slide.shapes[0]:
                     t_l = shape.text_frame.text.lower().strip()
-                    if any(kw in t_l for kw in ["insert product", "picture here", "insert picture", "insert image", "image here", "product image", "competitor image", "similar competitor"]):
+                    if any(kw in t_l for kw in ["insert product picture", "insert product image", "picture here", "insert picture", "insert image", "image here", "product picture", "product photo"]):
                         is_pic = True
                 if is_pic:
                     pic_shapes.append(shape)
@@ -1170,7 +1188,7 @@ def render_slide_preview(pptx_bytes, mapping_dict, image_mappings=None, excel_ro
                     tag_matched = img_tag
                     break
             if not is_ph:
-                if any(phrase in txt_l for phrase in ["insert product", "picture here", "insert picture", "insert image", "image here", "product picture", "product photo", "product image", "competitor image", "competitor picture", "similar competitor", "add image", "add picture", "[image]", "[picture]", "[photo]", "[img]"]):
+                if any(phrase in txt_l for phrase in ["insert product picture", "insert product photo", "insert product image", "insert picture", "insert image", "picture here", "image here", "product picture", "product photo", "product image", "add image", "add picture", "[image]", "[picture]", "[photo]", "[img]"]):
                     is_ph = True
                     tag_matched = txt_raw.strip() or "📷 Product Image"
                 elif re.search(r'\[[^\]]*(image|img|photo|picture|pic)[^\]]*\]', txt_l):
@@ -1751,6 +1769,36 @@ if current_page == "create":
                         </div>
                     </div>
                     """, unsafe_allow_html=True)
+
+                    # Quick inspection of embedded Excel images and resolution
+                    try:
+                        _img_map = get_excel_images(st.session_state.excel_file_bytes)
+                        _ordered = _img_map.get('__ordered__', [])
+                        if _ordered:
+                            with st.expander(f"🖼️ Detected Embedded Images ({len(_ordered)} found) & Quality Check", expanded=False):
+                                _num_cols = min(4, len(_ordered))
+                                _img_cols = st.columns(_num_cols)
+                                _low_res_found = False
+                                for _idx, _ib in enumerate(_ordered[:8]):
+                                    with _img_cols[_idx % _num_cols]:
+                                        try:
+                                            _im = PILImage.open(io.BytesIO(_ib))
+                                            _w, _h = _im.size
+                                            _is_low = _w < 500 or _h < 500
+                                            if _is_low:
+                                                _low_res_found = True
+                                            _status = "⚠️ Low Res" if _is_low else "✔️ Sharp"
+                                            st.image(_ib, caption=f"Image {_idx+1}: {_w}×{_h}px ({_status})", use_container_width=True)
+                                        except:
+                                            pass
+                                if _low_res_found:
+                                    st.markdown("""
+                                    <div style='background:#FFF3CD; border:1px solid #FFEEBA; border-radius:6px; padding:8px 12px; font-size:11.5px; color:#856404; margin-top:8px;'>
+                                        💡 <b>Image Quality Tip:</b> Some embedded images are low resolution (under 500px). For razor-sharp numbers and fine dimensions on the final slide, paste higher-resolution source images into your Excel spreadsheet.
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                    except Exception:
+                        pass
                 else:
                     if st.session_state.excel_file_uploaded:
                         st.session_state.excel_file_uploaded = False
