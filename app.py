@@ -403,17 +403,24 @@ def get_excel_images(excel_bytes):
     """
     Extracts all images from an Excel workbook and returns:
     image_map: {
-        row_idx: {normalized_col: img_bytes, '__primary__': img_bytes},
-        '__ordered__': [img_bytes_1, img_bytes_2, ...]  # sorted top-to-bottom
+        row_idx: {
+            '__list__': [img_bytes_1, img_bytes_2, ...],
+            '__primary__': img_bytes_1,
+            '1': img_bytes_1,
+            '2': img_bytes_2,
+            normalized_col: img_bytes,
+            ...
+        },
+        '__ordered__': [img_bytes_1, img_bytes_2, ...]
     }
     """
     import zipfile
     image_map = {}
     ordered_items = []  # list of (row_idx, col_idx, img_bytes)
+    row_grouped_items = {}
 
     try:
         wb = openpyxl.load_workbook(io.BytesIO(excel_bytes), data_only=False)
-        # Check all sheets; prefer sheets that actually contain images
         sheets_to_check = [wb.active] + [s for s in wb.worksheets if s != wb.active]
         
         for ws in sheets_to_check:
@@ -421,7 +428,7 @@ def get_excel_images(excel_bytes):
             if not ws_images:
                 continue
 
-            # Build col_headers across top 5 rows in case row 1 is a title/banner
+            # Build col_headers across top 5 rows
             col_headers = {}
             for header_row in range(1, min(6, ws.max_row + 1)):
                 for col_idx in range(1, ws.max_column + 1):
@@ -458,19 +465,32 @@ def get_excel_images(excel_bytes):
                     ordered_items.append((r_sort, c_sort, img_data))
 
                     if row_idx is not None:
-                        if row_idx not in image_map:
-                            image_map[row_idx] = {}
-                        
-                        norm_header = col_headers.get(col_idx) if col_idx is not None else None
-                        if norm_header:
-                            image_map[row_idx][norm_header] = img_data
-                        
-                        if '__primary__' not in image_map[row_idx]:
-                            image_map[row_idx]['__primary__'] = img_data
+                        if row_idx not in row_grouped_items:
+                            row_grouped_items[row_idx] = []
+                        row_grouped_items[row_idx].append((c_sort, img_data, col_headers.get(col_idx)))
                 except:
                     pass
 
-            if image_map:
+            if row_grouped_items:
+                for r_idx, items in row_grouped_items.items():
+                    items.sort(key=lambda x: x[0])
+                    if r_idx not in image_map:
+                        image_map[r_idx] = {}
+                    img_list = [it[1] for it in items]
+                    image_map[r_idx]['__list__'] = img_list
+                    image_map[r_idx]['__primary__'] = img_list[0]
+                    for slot, (c_idx, b, h_norm) in enumerate(items):
+                        slot_str = str(slot + 1)
+                        image_map[r_idx][slot_str] = b
+                        image_map[r_idx][f"image {slot_str}"] = b
+                        image_map[r_idx][f"image{slot_str}"] = b
+                        image_map[r_idx][f"image_{slot_str}"] = b
+                        if h_norm:
+                            image_map[r_idx][h_norm] = b
+                            h_clean = re.sub(r'\([^)]*\)', '', h_norm).strip()
+                            image_map[r_idx][h_clean] = b
+                            if 'competitor' in h_norm:
+                                image_map[r_idx]['competitor'] = b
                 break
     except Exception as e:
         pass
@@ -478,7 +498,7 @@ def get_excel_images(excel_bytes):
     ordered_items.sort(key=lambda x: (x[0], x[1]))
     ordered_list = [item[2] for item in ordered_items]
 
-    # Fallback: Check zip for embedded media if openpyxl found no images (e.g. In-Cell images)
+    # Fallback: Check zip for embedded media (essential for Office 365 in-cell pictures)
     if not ordered_list:
         try:
             with zipfile.ZipFile(io.BytesIO(excel_bytes), 'r') as zf:
@@ -488,14 +508,58 @@ def get_excel_images(excel_bytes):
                         return [int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+)', s)]
                     media_files.sort(key=_nat_key)
 
+                    _df_cols = []
+                    try:
+                        _df_cols = list(pd.read_excel(io.BytesIO(excel_bytes), nrows=0).columns)
+                    except:
+                        pass
+
+                    img_cols = []
+                    for c in _df_cols:
+                        c_str = str(c).strip()
+                        c_norm = re.sub(r'[\[\]_]', ' ', c_str).lower()
+                        if any(kw in c_norm for kw in ['image', 'img', 'photo', 'picture', 'pic']):
+                            img_cols.append(c_str)
+
+                    if img_cols:
+                        num_img_cols = len(img_cols)
+                    else:
+                        try:
+                            _df_len = len(pd.read_excel(io.BytesIO(excel_bytes)))
+                            num_img_cols = max(1, len(media_files) // max(1, _df_len))
+                        except:
+                            num_img_cols = 1
+
                     for idx, mf in enumerate(media_files):
                         img_data = zf.read(mf)
                         if img_data:
-                            row_num = idx + 2
+                            row_num = (idx // num_img_cols) + 2
+                            slot = idx % num_img_cols
+                            slot_str = str(slot + 1)
+
                             if row_num not in image_map:
-                                image_map[row_num] = {}
-                            image_map[row_num]['__primary__'] = img_data
-                            image_map[row_num]['image'] = img_data
+                                image_map[row_num] = {'__list__': []}
+                            if '__list__' not in image_map[row_num]:
+                                image_map[row_num]['__list__'] = []
+                            image_map[row_num]['__list__'].append(img_data)
+
+                            if '__primary__' not in image_map[row_num]:
+                                image_map[row_num]['__primary__'] = img_data
+                            image_map[row_num]['image'] = image_map[row_num]['__primary__']
+                            image_map[row_num][slot_str] = img_data
+                            image_map[row_num][f"image {slot_str}"] = img_data
+                            image_map[row_num][f"image{slot_str}"] = img_data
+                            image_map[row_num][f"image_{slot_str}"] = img_data
+
+                            if slot < len(img_cols):
+                                col_raw = img_cols[slot]
+                                norm_col = re.sub(r'\s+', ' ', re.sub(r'[\[\]_]', ' ', str(col_raw))).strip().lower()
+                                clean_col = re.sub(r'\s+', ' ', re.sub(r'\([^)]*\)', '', norm_col)).strip()
+                                image_map[row_num][norm_col] = img_data
+                                image_map[row_num][clean_col] = img_data
+                                if 'competitor' in norm_col:
+                                    image_map[row_num]['competitor'] = img_data
+
                             ordered_list.append(img_data)
         except:
             pass
@@ -521,59 +585,111 @@ def replace_text_in_shape(shape, placeholders):
             for cell in row.cells:
                 process_text_frame(cell.text_frame, placeholders)
 
-def find_image_placeholder(slide, image_tag=None):
+def find_all_image_placeholders(slide, used_shapes=None):
     """
-    Finds an image placeholder shape on a slide using multiple fallback strategies:
-    1. Shape containing specific image_tag (e.g. '[Image]' or '[Product Image]')
-    2. Shape containing any generic image tag or text (e.g. 'insert product', 'picture here', 'insert picture', '[image]')
-    3. Native PowerPoint Picture Placeholder shape (type 18 or 14)
-    4. Shape with name containing image keywords ('picture', 'image', 'photo')
+    Returns all candidate image placeholder shapes on a slide, ordered top-to-bottom, then left-to-right.
+    Skips any shapes already in used_shapes.
     """
-    # 1. Look for specific tag if provided
-    if image_tag:
-        tag_l = image_tag.lower().strip()
-        for shape in slide.shapes:
-            if shape.has_text_frame:
-                if tag_l in shape.text_frame.text.lower():
-                    return shape
+    if used_shapes is None:
+        used_shapes = set()
 
-    # 2. Look for explicit placeholder phrases or bracketed image tags
     ph_phrases = [
         "insert product", "picture here", "insert picture", "insert image",
         "image here", "product picture", "product photo", "product image",
+        "competitor image", "competitor picture", "competitor photo", "similar competitor",
         "add image", "add picture", "[image]", "[picture]", "[photo]", "[img]"
     ]
+
+    candidates = []
     for shape in slide.shapes:
+        if shape in used_shapes:
+            continue
+
+        # 1. Bracketed image tag in text frame
         if shape.has_text_frame:
             text_lower = shape.text_frame.text.lower().strip()
-            if any(phrase in text_lower for phrase in ph_phrases):
-                return shape
+            if any(phrase in text_lower for phrase in ph_phrases) or re.search(r'\[[^\]]*(image|img|photo|picture|pic)[^\]]*\]', text_lower):
+                candidates.append(shape)
+                continue
 
-    # 3. Native PowerPoint picture placeholder
-    for shape in slide.shapes:
+        # 2. Native PowerPoint picture placeholder
         if getattr(shape, 'is_placeholder', False):
             try:
                 ph_type = shape.placeholder_format.type
                 if ph_type in (18, 14) or 'picture' in str(ph_type).lower():
-                    return shape
+                    candidates.append(shape)
+                    continue
             except:
                 pass
 
-    # 4. Shape by name (excluding first shape if it's slide title)
-    for shape in slide.shapes:
+        # 3. Shape name containing image keywords (excluding title shape)
         if shape != slide.shapes[0]:
             sname = shape.name.lower()
             if any(kw in sname for kw in ['picture', 'photo', 'image placeholder', 'product image']):
-                return shape
+                candidates.append(shape)
+                continue
 
-    # 5. Last resort: ANY shape (not title) containing keyword 'picture' or 'image'
-    for shape in slide.shapes:
+        # 4. Text containing keywords like 'image', 'picture', 'photo'
         if shape.has_text_frame and shape != slide.shapes[0]:
-            text_lower = shape.text_frame.text.lower()
-            if any(kw in text_lower for kw in ["picture", "image", "photo", "insert"]):
-                return shape
+            text_lower = shape.text_frame.text.lower().strip()
+            if any(kw in text_lower for kw in ["picture", "image", "photo", "competitor"]):
+                candidates.append(shape)
+                continue
 
-    return None
+    # Deduplicate while preserving order
+    seen = set()
+    unique_candidates = []
+    for s in candidates:
+        if id(s) not in seen:
+            seen.add(id(s))
+            unique_candidates.append(s)
+
+    # Sort top-to-bottom, then left-to-right
+    unique_candidates.sort(key=lambda s: (s.top, s.left))
+    return unique_candidates
+
+def find_image_placeholder(slide, image_tag=None, used_shapes=None):
+    """
+    Finds an image placeholder shape on a slide using multiple fallback strategies:
+    1. Shape containing specific image_tag (e.g. '[Image 1]' or '[Product Image]')
+    2. Numbered tag match (e.g. tag 2 matches shape containing '2' or 'competitor')
+    3. Generic image tag or text
+    4. Native PowerPoint Picture Placeholder shape
+    5. Shape by name
+    """
+    if used_shapes is None:
+        used_shapes = set()
+
+    # 1. Look for specific tag if provided
+    if image_tag:
+        tag_l = image_tag.lower().strip()
+        tag_clean = re.sub(r'[\[\]_]', ' ', tag_l).strip()
+        tag_inner = re.sub(r'\([^)]*\)', '', tag_clean).strip()
+        tag_num = re.search(r'(\d+)', tag_inner)
+        tag_digit = tag_num.group(1) if tag_num else None
+
+        # Check exact tag or inner tag in text frame
+        for shape in slide.shapes:
+            if shape in used_shapes:
+                continue
+            if shape.has_text_frame:
+                txt = shape.text_frame.text.lower()
+                if tag_l in txt or tag_clean in txt or tag_inner in txt:
+                    return shape
+
+        # If tag has digit (e.g. 2 for Image 2), check for shapes with that digit or 'competitor'
+        if tag_digit:
+            for shape in slide.shapes:
+                if shape in used_shapes:
+                    continue
+                if shape.has_text_frame:
+                    txt = shape.text_frame.text.lower()
+                    if tag_digit in txt or (tag_digit == '2' and 'competitor' in txt):
+                        return shape
+
+    # Fallback to candidate image shapes sorted spatially
+    candidates = find_all_image_placeholders(slide, used_shapes=used_shapes)
+    return candidates[0] if candidates else None
 
 def insert_image_into_placeholder(slide, img_bytes, placeholder):
     if not img_bytes or placeholder is None:
@@ -640,6 +756,7 @@ def extract_placeholders_from_pptx(pptx_bytes):
     pattern = re.compile(r'\[([^\]]+)\]')
     try:
         prs = Presentation(io.BytesIO(pptx_bytes))
+        pic_shapes = []
         for slide in prs.slides:
             for shape in slide.shapes:
                 if shape.has_text_frame:
@@ -652,6 +769,30 @@ def extract_placeholders_from_pptx(pptx_bytes):
                             for para in cell.text_frame.paragraphs:
                                 for match in pattern.findall(para.text):
                                     placeholders.add(f"[{match.strip()}]")
+
+                # Check if this shape is a picture placeholder or image candidate
+                is_pic = False
+                if getattr(shape, 'is_placeholder', False):
+                    try:
+                        ph_type = shape.placeholder_format.type
+                        if ph_type in (18, 14) or 'picture' in str(ph_type).lower():
+                            is_pic = True
+                    except:
+                        pass
+                if not is_pic and shape.has_text_frame and shape != slide.shapes[0]:
+                    t_l = shape.text_frame.text.lower().strip()
+                    if any(kw in t_l for kw in ["insert product", "picture here", "insert picture", "insert image", "image here", "product image", "competitor image", "similar competitor"]):
+                        is_pic = True
+                if is_pic:
+                    pic_shapes.append(shape)
+
+        has_img_tag = any(parse_placeholder_tag(t)[1] == 'Image' for t in placeholders)
+        if not has_img_tag and pic_shapes:
+            if len(pic_shapes) == 1:
+                placeholders.add("[Image]")
+            else:
+                for idx in range(len(pic_shapes)):
+                    placeholders.add(f"[Image {idx + 1}]")
     except:
         pass
     return sorted(list(placeholders))
@@ -688,30 +829,40 @@ def parse_placeholder_tag(full_tag):
         
     return inner, None, None
 
+def extract_number_from_text(s):
+    if not s:
+        return None
+    s_clean = re.sub(r'\([^)]*\)', '', str(s)).strip()
+    m = re.search(r'(\d+)', s_clean)
+    return int(m.group(1)) if m else None
+
 def build_auto_mapping(all_pptx_tags, excel_columns):
     def _norm(s):
         s = re.sub(r'[\[\]_]', ' ', str(s))
         return re.sub(r'\s+', ' ', s).strip().lower()
 
     def _num(s):
-        m = re.search(r'(\d+)\s*$', s.strip())
-        return int(m.group(1)) if m else None
+        return extract_number_from_text(s)
 
     def _best_excel_match(base_norm, cols):
-        tag_num   = _num(base_norm)
-        tag_roots = {w for w in base_norm.split() if not w.isdigit()}
+        base_clean = re.sub(r'\([^)]*\)', '', base_norm).strip()
+        tag_num   = _num(base_clean)
+        tag_roots = {w for w in base_clean.split() if not w.isdigit()}
         best_col, best_score = '', -999
         for col in cols:
             col_norm  = _norm(col)
+            col_clean = re.sub(r'\([^)]*\)', '', col_norm).strip()
             col_num   = _num(col_norm)
-            col_roots = {w for w in col_norm.split() if not w.isdigit()}
+            col_roots = {w for w in col_clean.split() if not w.isdigit()}
             if not any(tr in cr or cr in tr for tr in tag_roots for cr in col_roots):
                 continue
             score = 1
             if tag_num is not None and col_num is not None:
-                score += 5 if tag_num == col_num else -10
+                score += 10 if tag_num == col_num else -20
             elif tag_num is not None:
                 score -= 1
+            if base_clean in col_clean or col_clean in base_clean:
+                score += 5
             if base_norm in col_norm or col_norm in base_norm:
                 score += 2
             if score > best_score:
@@ -729,11 +880,14 @@ def build_auto_mapping(all_pptx_tags, excel_columns):
         if col_type == 'Image':
             # Image tags must NOT be put into mapping_dict (which would overwrite them with text)
             if not matched_col:
-                for col in excel_columns:
-                    col_l = _norm(col)
-                    if any(kw in col_l for kw in ['image', 'img', 'photo', 'picture', 'pic']):
-                        matched_col = col
-                        break
+                img_cols = [c for c in excel_columns if any(kw in _norm(c) for kw in ['image', 'img', 'photo', 'picture', 'pic'])]
+                tag_num = _num(base_norm)
+                if tag_num is not None and 1 <= tag_num <= len(img_cols):
+                    matched_col = img_cols[tag_num - 1]
+                elif img_cols:
+                    assigned = set(image_mappings.values())
+                    unassigned = [c for c in img_cols if c not in assigned]
+                    matched_col = unassigned[0] if unassigned else img_cols[0]
             image_mappings[full_tag] = matched_col or base
             continue
 
@@ -832,35 +986,60 @@ def run_automation(excel_bytes, pptx_bytes, from_row, to_row):
             else:
                 placeholders[tag] = safe_text(raw_val)
 
-        # 2. Determine best image for this row
+        # 2. Determine best images for this row
         row_images = image_map.get(excel_row_num, {})
-        row_fallback_img = None
+        row_imgs_list = []
         if isinstance(row_images, dict):
-            row_fallback_img = row_images.get('__primary__')
-            if not row_fallback_img and row_images:
-                for v in row_images.values():
-                    if v and isinstance(v, (bytes, bytearray)):
-                        row_fallback_img = v
-                        break
-        # Fallback to row index in ordered_images
-        if not row_fallback_img and i < len(ordered_images):
-            row_fallback_img = ordered_images[i]
+            row_imgs_list = row_images.get('__list__', [])
+            if not row_imgs_list:
+                row_imgs_list = [v for k, v in row_images.items() if not str(k).startswith('__') and isinstance(v, (bytes, bytearray))]
+        if not row_imgs_list and ordered_images:
+            if i < len(ordered_images):
+                row_imgs_list = [ordered_images[i]]
+
+        row_fallback_img = row_imgs_list[0] if row_imgs_list else None
 
         # 3. Replace images dynamically based on image_mappings
-        images_inserted = False
+        used_shapes = set()
+        used_img_slots = set()
+
+        # Step 3A: Tag-based placement
         for img_tag, col_name in image_mappings.items():
             img_bytes = None
-            if col_name and isinstance(row_images, dict):
-                normalized_col = re.sub(r'\s+', ' ', re.sub(r'[\[\]_]', ' ', str(col_name))).strip().lower()
-                img_bytes = row_images.get(normalized_col)
-            if not img_bytes:
-                img_bytes = row_fallback_img
+            slot_idx = None
 
-            ph_shape = find_image_placeholder(slide, image_tag=img_tag)
+            # Look up by column name in row_images
+            if col_name and isinstance(row_images, dict):
+                norm_col = re.sub(r'\s+', ' ', re.sub(r'[\[\]_]', ' ', str(col_name))).strip().lower()
+                clean_col = re.sub(r'\([^)]*\)', '', norm_col).strip()
+                img_bytes = row_images.get(norm_col) or row_images.get(clean_col)
+
+            # Look up by tag number (e.g. tag 1 -> slot 0, tag 2 -> slot 1)
+            t_num = extract_number_from_text(img_tag)
+            if not img_bytes and t_num is not None:
+                s_idx = t_num - 1
+                if 0 <= s_idx < len(row_imgs_list):
+                    img_bytes = row_imgs_list[s_idx]
+                    slot_idx = s_idx
+                elif str(t_num) in row_images:
+                    img_bytes = row_images.get(str(t_num))
+
+            ph_shape = find_image_placeholder(slide, image_tag=img_tag, used_shapes=used_shapes)
             if ph_shape:
+                if not img_bytes:
+                    for s_i, ib in enumerate(row_imgs_list):
+                        if s_i not in used_img_slots:
+                            img_bytes = ib
+                            slot_idx = s_i
+                            break
+                if not img_bytes:
+                    img_bytes = row_fallback_img
+
                 if img_bytes:
                     insert_image_into_placeholder(slide, img_bytes, ph_shape)
-                    images_inserted = True
+                    used_shapes.add(ph_shape)
+                    if slot_idx is not None:
+                        used_img_slots.add(slot_idx)
                 else:
                     if ph_shape.has_text_frame:
                         for para in ph_shape.text_frame.paragraphs:
@@ -868,19 +1047,29 @@ def run_automation(excel_bytes, pptx_bytes, from_row, to_row):
                                 run.text = ""
                         try: ph_shape.fill.background()
                         except: pass
+                    used_shapes.add(ph_shape)
 
-        # 4. Fallback to generic placeholder search if no mapped image was inserted
-        if not images_inserted and row_fallback_img:
-            placeholder = find_image_placeholder(slide)
-            if placeholder:
-                insert_image_into_placeholder(slide, row_fallback_img, placeholder)
-                images_inserted = True
+        # Step 3B: Assign any remaining image placeholder shapes to remaining images
+        remaining_shapes = find_all_image_placeholders(slide, used_shapes=used_shapes)
+        for ph_shape in remaining_shapes:
+            img_bytes = None
+            for s_i, ib in enumerate(row_imgs_list):
+                if s_i not in used_img_slots:
+                    img_bytes = ib
+                    used_img_slots.add(s_i)
+                    break
+            if img_bytes:
+                insert_image_into_placeholder(slide, img_bytes, ph_shape)
+                used_shapes.add(ph_shape)
+            elif not used_shapes and row_fallback_img:
+                insert_image_into_placeholder(slide, row_fallback_img, ph_shape)
+                used_shapes.add(ph_shape)
 
-        # 5. Replace text (AFTER image shapes have been matched!)
+        # 4. Replace text (AFTER image shapes have been matched!)
         for shape in slide.shapes:
             replace_text_in_shape(shape, placeholders)
 
-        # 6. Clean up any remaining unreplaced image tags like [Image] or 'Insert Product Picture Here'
+        # 5. Clean up any remaining unreplaced image tags like [Image] or 'Insert Product Picture Here'
         for shape in slide.shapes:
             if shape.has_text_frame:
                 txt = shape.text_frame.text
@@ -963,6 +1152,94 @@ def render_slide_preview(pptx_bytes, mapping_dict, image_mappings=None, excel_ro
             return safe_format(raw_val)
         return safe_text(raw_val)
 
+    # Pre-pass: Detect and assign images to all image placeholder shapes
+    img_ph_candidates = []
+    for shape in slide.shapes:
+        is_ph = False
+        tag_matched = None
+        if shape.has_text_frame:
+            txt_raw = shape.text_frame.text
+            txt_l = txt_raw.lower().strip()
+            for img_tag in image_mappings.keys():
+                if img_tag.lower() in txt_l:
+                    is_ph = True
+                    tag_matched = img_tag
+                    break
+            if not is_ph:
+                if any(phrase in txt_l for phrase in ["insert product", "picture here", "insert picture", "insert image", "image here", "product picture", "product photo", "product image", "competitor image", "competitor picture", "similar competitor", "add image", "add picture", "[image]", "[picture]", "[photo]", "[img]"]):
+                    is_ph = True
+                    tag_matched = txt_raw.strip() or "📷 Product Image"
+                elif re.search(r'\[[^\]]*(image|img|photo|picture|pic)[^\]]*\]', txt_l):
+                    is_ph = True
+                    tag_matched = txt_raw.strip() or "📷 Product Image"
+        elif getattr(shape, 'is_placeholder', False):
+            try:
+                ph_type = shape.placeholder_format.type
+                if ph_type in (18, 14) or 'picture' in str(ph_type).lower():
+                    is_ph = True
+                    tag_matched = "📷 Picture Placeholder"
+            except:
+                pass
+        if not is_ph and shape != slide.shapes[0]:
+            sname = shape.name.lower()
+            if any(kw in sname for kw in ['picture', 'photo', 'image placeholder', 'product image']):
+                is_ph = True
+                tag_matched = shape.name
+        
+        if is_ph:
+            img_ph_candidates.append((shape, tag_matched))
+
+    # Sort candidates top-to-bottom, then left-to-right
+    img_ph_candidates.sort(key=lambda item: (item[0].top, item[0].left))
+
+    # Assign images to candidate shapes
+    shape_img_map = {}
+    if not is_template_mode and excel_row_idx is not None:
+        row_imgs = image_map.get(excel_row_idx + 2, {})
+        row_imgs_list = []
+        if isinstance(row_imgs, dict):
+            row_imgs_list = row_imgs.get('__list__', [])
+            if not row_imgs_list:
+                row_imgs_list = [v for k, v in row_imgs.items() if not str(k).startswith('__') and isinstance(v, (bytes, bytearray))]
+        if not row_imgs_list:
+            ord_imgs = image_map.get('__ordered__', [])
+            if excel_row_idx < len(ord_imgs):
+                row_imgs_list = [ord_imgs[excel_row_idx]]
+
+        used_preview_slots = set()
+        # 1. Match by explicit tag
+        for shape, tag in img_ph_candidates:
+            if tag and tag in image_mappings:
+                col_name = image_mappings[tag]
+                norm_col = re.sub(r'\s+', ' ', re.sub(r'[\[\]_]', ' ', str(col_name))).strip().lower()
+                clean_col = re.sub(r'\([^)]*\)', '', norm_col).strip()
+                b = row_imgs.get(norm_col) or row_imgs.get(clean_col)
+                t_num = extract_number_from_text(tag)
+                if not b and t_num is not None:
+                    s_idx = t_num - 1
+                    if 0 <= s_idx < len(row_imgs_list):
+                        b = row_imgs_list[s_idx]
+                        used_preview_slots.add(s_idx)
+                if b:
+                    shape_img_map[id(shape)] = b
+
+        # 2. Match unassigned shapes to next available image in row_imgs_list
+        for slot, (shape, tag) in enumerate(img_ph_candidates):
+            if id(shape) not in shape_img_map:
+                for s_i, ib in enumerate(row_imgs_list):
+                    if s_i not in used_preview_slots:
+                        shape_img_map[id(shape)] = ib
+                        used_preview_slots.add(s_i)
+                        break
+                if id(shape) not in shape_img_map and row_imgs_list:
+                    if slot < len(row_imgs_list):
+                        shape_img_map[id(shape)] = row_imgs_list[slot]
+                    else:
+                        shape_img_map[id(shape)] = row_imgs_list[0]
+
+    img_candidate_ids = {id(s) for s, _ in img_ph_candidates}
+    img_candidate_tags = {id(s): (tag or f"📷 Image {i+1}") for i, (s, tag) in enumerate(img_ph_candidates)}
+
     shapes_html = []
     for shape in slide.shapes:
         try:
@@ -976,61 +1253,19 @@ def render_slide_preview(pptx_bytes, mapping_dict, image_mappings=None, excel_ro
             w_pct = max(0.0, min(100.0 - l_pct, w_pct))
             h_pct = max(0.0, min(100.0 - t_pct, h_pct))
 
-            is_img_ph = False
-            img_tag_matched = None
-            
-            if shape.has_text_frame:
-                txt_raw = shape.text_frame.text
-                txt_l = txt_raw.lower().strip()
-                # 1. Check if it matches any mapped image tag
-                for img_tag in image_mappings.keys():
-                    if img_tag.lower() in txt_l:
-                        is_img_ph = True
-                        img_tag_matched = img_tag
-                        break
-                # 2. Check if it matches generic image phrases
-                if not is_img_ph:
-                    if any(phrase in txt_l for phrase in ["insert product", "picture here", "insert picture", "insert image", "image here", "product picture", "product photo", "product image", "[image]", "[picture]", "[photo]", "[img]"]):
-                        is_img_ph = True
-                        img_tag_matched = txt_raw.strip() or "📷 Product Image"
-            elif getattr(shape, 'is_placeholder', False):
-                try:
-                    ph_type = shape.placeholder_format.type
-                    if ph_type in (18, 14) or 'picture' in str(ph_type).lower():
-                        is_img_ph = True
-                        img_tag_matched = "📷 Picture Placeholder"
-                except:
-                    pass
+            is_img_ph = (id(shape) in img_candidate_ids)
 
             if is_img_ph:
-                img_bytes_val = None
-                if not is_template_mode and excel_row_idx is not None:
-                    row_imgs = image_map.get(excel_row_idx + 2, {})
-                    if isinstance(row_imgs, dict):
-                        if img_tag_matched and img_tag_matched in image_mappings:
-                            col_name = image_mappings.get(img_tag_matched)
-                            if col_name:
-                                norm_col = re.sub(r'\s+', ' ', re.sub(r'[\[\]_]', ' ', str(col_name))).strip().lower()
-                                img_bytes_val = row_imgs.get(norm_col)
-                        if not img_bytes_val:
-                            img_bytes_val = row_imgs.get('__primary__')
-                        if not img_bytes_val and row_imgs:
-                            for v in row_imgs.values():
-                                if v and isinstance(v, (bytes, bytearray)):
-                                    img_bytes_val = v
-                                    break
-                    if not img_bytes_val:
-                        ord_imgs = image_map.get('__ordered__', [])
-                        if excel_row_idx < len(ord_imgs):
-                            img_bytes_val = ord_imgs[excel_row_idx]
-                            
+                img_bytes_val = shape_img_map.get(id(shape))
+                img_label = img_candidate_tags.get(id(shape), "📷 Product Image")
+
                 if img_bytes_val:
                     b64 = base64.b64encode(img_bytes_val).decode('utf-8')
                     img_src_html = f'<img src="data:image/jpeg;base64,{b64}" style="width:100%; height:100%; object-fit:contain;"/>'
                 else:
                     img_src_html = f"""
                     <div style="width:100%; height:100%; background:#FAF8F5; border:1.5px dashed #CFC0B0; border-radius:6px; display:flex; align-items:center; justify-content:center; color:#8B6F4E; font-size:9.5px; text-align:center; padding:6px; font-weight:700;">
-                        {img_tag_matched or '📷 Product Image'}
+                        {img_label}
                     </div>
                     """
                 shapes_html.append(f"""
